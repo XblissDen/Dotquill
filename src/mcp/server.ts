@@ -222,6 +222,18 @@ const zOp = z.discriminatedUnion("op", [
     pattern: z.enum(["checker", "sparse", "dense"]).optional().describe("checker 50%, sparse 25%, dense 75%."),
     onlyOn: zOnlyOn,
   }),
+  z.object({
+    op: z.literal("pattern"),
+    x: zInt,
+    y: zInt,
+    w: zPos,
+    h: zPos,
+    rows: z
+      .array(z.string())
+      .min(1)
+      .describe('A small tile of pixel rows, all the same length ("." transparent, "_" keep), repeated across the box from its top-left corner.'),
+    onlyOn: zOnlyOn,
+  }).describe("Repeat a pattern over a box: a grass strip along a tileset row, bricks, borders, textures. Saves typing long rows."),
 ]);
 
 const zFrameOp = z.discriminatedUnion("action", [
@@ -445,7 +457,7 @@ server.registerTool(
   {
     title: "Draw operations",
     description:
-      "Applies drawing ops in order to one layer of one frame, a list of frames, or all frames: pixel, line (polyline), rect, ellipse, fill, replace, outline, mirror, flip, shift, clear, copy, dither. Colors are legend characters, indices, palette hex or \".\". Most ops accept onlyOn to paint only over certain colors (great for shading inside a shape).",
+      "Applies drawing ops in order to one layer of one frame, a list of frames, or all frames: pixel, line (polyline), rect, ellipse, fill, replace, outline, mirror, flip, shift, clear, copy, dither, pattern (repeat a small tile of rows over a box). Colors are legend characters, indices, palette hex or \".\". Most ops accept onlyOn to paint only over certain colors (great for shading inside a shape).",
     inputSchema: {
       name: zName,
       ops: z.array(zOp).min(1),
@@ -862,10 +874,10 @@ server.registerTool(
   {
     title: "Export",
     description:
-      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D), "godot-tileset" (tileset assets: tile atlas PNG + a TileSet .tres; blob tilesets come with a terrain set, so Godot autotiles them). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
+      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "aseprite" (editable .aseprite file at 1×: indexed palette, layers, frames with durations, tags, slices), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D), "godot-tileset" (tileset assets: tile atlas PNG + a TileSet .tres; blob tilesets come with a terrain set, so Godot autotiles them). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
     inputSchema: {
       name: zName,
-      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes", "godot-tileset"]),
+      format: z.enum(["png", "frames", "sheet", "gif", "aseprite", "godot-stylebox", "godot-spriteframes", "godot-tileset"]),
       slice: z.string().optional().describe("godot-stylebox: which 9-slice (default: the first)."),
       scale: z.number().int().min(1).max(32).optional().describe("Integer upscale (default 1)."),
       frame: zInt.optional().describe('For "png" and "godot-tileset" (default 0).'),

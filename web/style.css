@@ -292,6 +292,25 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.toolbar .group button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.cur-color {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid rgb(255 255 255 / 0.3);
+  /* Shown as a checkerboard while erasing. */
+  background: repeating-conic-gradient(#3a3a44 0 25%, #464652 0 50%) 0 0 / 8px 8px;
+}
+
+#canvas.paint {
+  cursor: cell;
+}
+
 .spacer {
   flex: 1;
 }
@@ -480,6 +499,26 @@ button:disabled {
 .swatch.hot {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.swatch {
+  cursor: pointer;
+}
+
+.swatch.selected {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+.layers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.layers input[type="radio"] {
+  accent-color: var(--accent);
+  margin: 0;
 }
 
 .export {

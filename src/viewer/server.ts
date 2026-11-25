@@ -177,11 +177,45 @@ function createServer(ws: Workspace, port: number): { server: http.Server; stop:
       }
     }
 
-    if (req.method === "POST" && p === "/api/export") {
+    if (req.method === "POST") {
       // Cross-site pages cannot send JSON here without a preflight we never approve.
       const origin = req.headers.origin;
       if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ""))) throw new HttpError(403, "Forbidden origin");
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "JSON only");
+    }
+
+    if (req.method === "POST" && p === "/api/paint") {
+      // Pencil/eraser strokes from the viewer: one request per stroke = one undo step.
+      const body = (await readBody(req)) as { name?: string; frame?: number; layer?: string; color?: number; points?: unknown };
+      const name = validateName(body.name ?? "");
+      const points = Array.isArray(body.points) ? body.points : [];
+      if (!points.length || points.length > 65536) throw new HttpError(400, "points: 1..65536 [x, y] pairs");
+      const updated = await ws.withLock(name, async () => {
+        const doc = await ws.load(name);
+        const frame = doc.checkFrame(Number(body.frame ?? 0));
+        const layer = doc.resolveLayer(body.layer);
+        const color = Number(body.color);
+        if (!Number.isInteger(color) || color < -1 || color >= doc.palette.length) throw new HttpError(400, "Bad color");
+        const cel = doc.cel(frame, layer);
+        for (const pt of points) {
+          const [x, y] = Array.isArray(pt) ? pt.map(Number) : [NaN, NaN];
+          if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= doc.width || y >= doc.height) continue;
+          cel[y * doc.width + x] = color;
+        }
+        await ws.save(name, doc);
+        return doc.updated;
+      });
+      return sendJSON(res, 200, { updated });
+    }
+
+    if (req.method === "POST" && p === "/api/undo") {
+      const body = (await readBody(req)) as { name?: string };
+      const name = validateName(body.name ?? "");
+      const done = await ws.withLock(name, () => ws.undo(name));
+      return sendJSON(res, 200, { undone: done, left: await ws.historyCount(name) });
+    }
+
+    if (req.method === "POST" && p === "/api/export") {
       const body = (await readBody(req)) as {
         name?: string;
         format?: string;

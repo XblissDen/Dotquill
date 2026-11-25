@@ -122,6 +122,7 @@ await call("render_preview", { name: "slime" });
 await call("audit", { name: "slime" });
 await call("export", { name: "slime", format: "sheet", scale: 4 });
 await call("export", { name: "slime", format: "gif", scale: 6 });
+assert.match(await call("export", { name: "slime", format: "aseprite" }), /slime\.aseprite \(\d+ bytes\)/);
 
 // Tool coverage on a scratch asset.
 await call("create_asset", { name: "smoke/shapes", width: 12, height: 12, palette: { preset: "pico-8" }, overwrite: true });
@@ -241,6 +242,11 @@ await call("draw", {
     { op: "rect", x: 48, y: 0, w: 8, h: 8, color: "l", fill: true },
   ],
 });
+// A grass strip along the island's top row of tiles, repeated from one tile's worth of rows.
+assert.match(
+  await call("draw", { name: "smoke/grass", ops: [{ op: "pattern", x: 1, y: 1, w: 22, h: 2, rows: ["cccccccc", "dcddcdcd"] }] }),
+  /#1 pattern: 44 px changed/,
+);
 assert.match(await call("get_asset", { name: "smoke/grass", rulers: false }), /Tileset: blob tileset, 8 px tiles, terrain "grass"/);
 assert.match(await call("render_preview", { name: "smoke/grass" }), /Orange lines = 8 px tile boundaries/);
 assert.match(await call("render_preview", { name: "smoke/grass", tilemap: true }), /47 of the 47 tiles appear/);

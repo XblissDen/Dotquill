@@ -57,7 +57,8 @@ export type DrawOp =
       h: number;
       color: ColorArg;
       pattern?: "checker" | "sparse" | "dense" | undefined;
-    } & Masked);
+    } & Masked)
+  | ({ op: "pattern"; x: number; y: number; w: number; h: number; rows: string[] } & Masked);
 
 export function resolveColor(arg: ColorArg, palette: readonly string[]): number {
   if (typeof arg === "number") {
@@ -383,6 +384,23 @@ function applyOp(ctx: Ctx, cel: Int16Array, op: DrawOp): void {
       }
       break;
     }
+    case "pattern": {
+      // Repeats a small tile of rows across the box, starting at its top-left corner.
+      checkBox(op.w, op.h);
+      const tile = parsePixelRows(op.rows, doc.palette);
+      const pw = tile[0]?.length ?? 0;
+      if (!pw || tile.some((r) => r.length !== pw)) {
+        throw new Error(`pattern rows must be non-empty and the same length (got ${op.rows.map((r) => Array.from(r).length).join(", ")}).`);
+      }
+      for (let j = 0; j < op.h; j++) {
+        const row = tile[j % tile.length];
+        for (let i = 0; i < op.w; i++) {
+          const v = row[i % pw];
+          if (v !== SKIP) set(op.x + i, op.y + j, v);
+        }
+      }
+      break;
+    }
     case "dither": {
       const c = col(op.color);
       checkBox(op.w, op.h);
@@ -429,6 +447,26 @@ export interface WriteResult {
   warnings: string[];
 }
 
+/** Text rows → palette indices (TRANSPARENT for ".", SKIP for "_"). Throws on unknown or off-palette characters. */
+export function parsePixelRows(rows: readonly string[], palette: readonly string[]): number[][] {
+  const last = indexToChar(palette.length - 1);
+  return rows.map((row, j) => {
+    if (typeof row !== "string") throw new Error(`Row ${j} is not a string.`);
+    return Array.from(row, (ch, i) => {
+      const v = charToIndex(ch);
+      if (v === undefined) {
+        throw new Error(
+          `Row ${j}, column ${i}: "${ch}" is not a pixel character. Use "." (transparent), "_" (keep) or palette chars 0..${last}. No spaces.`,
+        );
+      }
+      if (v >= palette.length) {
+        throw new Error(`Row ${j}, column ${i}: "${ch}" is beyond the palette (last character is "${last}").`);
+      }
+      return v;
+    });
+  });
+}
+
 /** Writes text rows into a cel at (x0, y0). "." = transparent, "_" = keep. Validates everything first. */
 export function writeRows(
   doc: PixelDoc,
@@ -438,22 +476,7 @@ export function writeRows(
   x0 = 0,
   y0 = 0,
 ): WriteResult {
-  const last = indexToChar(doc.palette.length - 1);
-  const parsed = rows.map((row, j) => {
-    if (typeof row !== "string") throw new Error(`Row ${j} is not a string.`);
-    return Array.from(row, (ch, i) => {
-      const v = charToIndex(ch);
-      if (v === undefined) {
-        throw new Error(
-          `Row ${j}, column ${i}: "${ch}" is not a pixel character. Use "." (transparent), "_" (keep) or palette chars 0..${last}. No spaces.`,
-        );
-      }
-      if (v >= doc.palette.length) {
-        throw new Error(`Row ${j}, column ${i}: "${ch}" is beyond the palette (last character is "${last}").`);
-      }
-      return v;
-    });
-  });
+  const parsed = parsePixelRows(rows, doc.palette);
   const cel = doc.cel(frame, layer);
   const W = doc.width;
   const H = doc.height;

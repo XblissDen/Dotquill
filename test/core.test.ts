@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { inflateSync } from "node:zlib";
 import { audit } from "../src/core/audit.ts";
 import { readPNG } from "../src/core/bitmap.ts";
 import { PixelDoc } from "../src/core/doc.ts";
@@ -14,6 +15,7 @@ import { PRESETS } from "../src/core/palettes.ts";
 import { renderPreview, renderTilemapPreview } from "../src/core/render.ts";
 import { nineSlice, sliceFromMargins, validateSlice } from "../src/core/slices.ts";
 import { defaultWorkspaceDir, Workspace } from "../src/core/store.ts";
+import { startViewer } from "../src/viewer/server.ts";
 import {
   BLOB_MASKS,
   blobTiles,
@@ -417,6 +419,172 @@ test("audit: tileset template checks replace the edge-contact warning", () => {
   assert.match(ok, /quarter\(s\) differ/);
   applyOps(doc, 0, "main", [{ op: "clear", region: { x: 12, y: 0, w: 4, h: 4 } }]);
   assert.match(audit(doc, "grass"), /Empty template tile\(s\): \(3,0\) inner corner \(hole at bottom-right\)/);
+});
+
+/** Minimal .aseprite reader written from the spec, to check the writer independently. */
+function readAseprite(buf: Buffer) {
+  let o = 0;
+  const u8 = () => buf.readUInt8(o++);
+  const u16 = () => ((o += 2), buf.readUInt16LE(o - 2));
+  const i16 = () => ((o += 2), buf.readInt16LE(o - 2));
+  const u32 = () => ((o += 4), buf.readUInt32LE(o - 4));
+  const i32 = () => ((o += 4), buf.readInt32LE(o - 4));
+  const str = () => {
+    const n = u16();
+    o += n;
+    return buf.toString("utf8", o - n, o);
+  };
+  const size = u32();
+  const magic = u16();
+  const frameCount = u16();
+  const width = u16();
+  const height = u16();
+  const depth = u16();
+  o = 28;
+  const transparent = u8();
+  o = 32;
+  const colorCount = u16();
+  o = 40;
+  const grid = [u16(), u16()];
+  o = 128;
+  const palette: string[] = [];
+  const layers: { name: string; visible: boolean }[] = [];
+  const tags: { name: string; from: number; to: number; dir: number }[] = [];
+  const slices: { name: string; bounds: number[]; center?: number[] }[] = [];
+  const frames: { duration: number; cels: { layer: number; x: number; y: number; w: number; h: number; px: Buffer }[] }[] = [];
+  for (let f = 0; f < frameCount; f++) {
+    const start = o;
+    const bytes = u32();
+    assert.equal(u16(), 0xf1fa, "frame magic");
+    u16();
+    const duration = u16();
+    o += 2;
+    const chunks = u32();
+    const frame = { duration, cels: [] as (typeof frames)[number]["cels"] };
+    for (let c = 0; c < chunks; c++) {
+      const cs = o;
+      const len = u32();
+      const type = u16();
+      if (type === 0x2019) {
+        const n = u32();
+        const from = u32();
+        const to = u32();
+        o += 8;
+        for (let i = from; i <= to; i++) {
+          u16();
+          const [r, g, b, a] = [u8(), u8(), u8(), u8()];
+          palette[i] = a ? `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}` : "transparent";
+        }
+        assert.equal(palette.length, n);
+      } else if (type === 0x2004) {
+        const flags = u16();
+        o += 2 * 5 + 1 + 3;
+        layers.push({ name: str(), visible: !!(flags & 1) });
+      } else if (type === 0x2005) {
+        const layer = u16();
+        const x = i16();
+        const y = i16();
+        o += 1;
+        assert.equal(u16(), 2, "compressed cel");
+        o += 2 + 5;
+        const w = u16();
+        const h = u16();
+        frame.cels.push({ layer, x, y, w, h, px: inflateSync(buf.subarray(o, cs + len)) });
+      } else if (type === 0x2018) {
+        const n = u16();
+        o += 8;
+        for (let i = 0; i < n; i++) {
+          const from = u16();
+          const to = u16();
+          const dir = u8();
+          o += 2 + 6 + 3 + 1;
+          tags.push({ name: str(), from, to, dir });
+        }
+      } else if (type === 0x2022) {
+        u32();
+        const flags = u32();
+        u32();
+        const name = str();
+        u32();
+        const bounds = [i32(), i32(), u32(), u32()];
+        slices.push(flags & 1 ? { name, bounds, center: [i32(), i32(), u32(), u32()] } : { name, bounds });
+      }
+      o = cs + len;
+    }
+    assert.equal(o - start, bytes, `frame ${f} size`);
+    frames.push(frame);
+  }
+  assert.equal(o, size, "file size");
+  return { magic, frameCount, width, height, depth, transparent, colorCount, grid, palette, layers, tags, slices, frames };
+}
+
+test("aseprite export: header, palette, layers, cels, tags and slices read back per the spec", () => {
+  const doc = make(6, 4, { layers: ["body", "fx"], frames: 2, frameDuration: 120 });
+  writeRows(doc, 0, "body", ["......", ".0123.", ".4567.", "......"]);
+  writeRows(doc, 1, "body", ["..12..", "......", "......", "......"]);
+  writeRows(doc, 0, "fx", ["f.....", "......", "......", ".....e"]);
+  doc.layers[1].visible = false;
+  doc.frames[1].duration = 300;
+  doc.tags.push({ name: "idle", from: 0, to: 1, direction: "pingpong" });
+  doc.slices.push(sliceFromMargins("box", { x: 0, y: 0, w: 6, h: 4 }, { left: 1, top: 1, right: 2, bottom: 1 }));
+  const [file] = buildExport(doc, "chars/thing", { format: "aseprite", scale: 4 });
+  assert.equal(file.path, "chars/thing.aseprite");
+  const a = readAseprite(file.data);
+  assert.deepEqual([a.magic, a.frameCount, a.width, a.height, a.depth, a.transparent], [0xa5e0, 2, 6, 4, 8, 0]);
+  assert.equal(a.colorCount, PAL.length + 1);
+  assert.deepEqual(a.palette, ["transparent", ...PAL]);
+  assert.deepEqual(a.layers, [
+    { name: "body", visible: true },
+    { name: "fx", visible: false },
+  ]);
+  assert.deepEqual(a.frames.map((f) => f.duration), [120, 300]);
+  // Cels are cropped to their pixels; index i is stored as i + 1.
+  const body0 = a.frames[0].cels.find((c) => c.layer === 0)!;
+  assert.deepEqual([body0.x, body0.y, body0.w, body0.h], [1, 1, 4, 2]);
+  assert.deepEqual([...body0.px], [1, 2, 3, 4, 5, 6, 7, 8]);
+  const fx0 = a.frames[0].cels.find((c) => c.layer === 1)!;
+  assert.deepEqual([fx0.x, fx0.y, fx0.w, fx0.h, fx0.px[0], fx0.px[fx0.px.length - 1]], [0, 0, 6, 4, 16, 15]);
+  assert.deepEqual(a.frames[1].cels.map((c) => [c.layer, c.x, c.y, c.w, c.h]), [[0, 2, 0, 2, 1]]);
+  assert.deepEqual(a.tags, [{ name: "idle", from: 0, to: 1, dir: 2 }]);
+  assert.deepEqual(a.slices, [{ name: "box", bounds: [0, 0, 6, 4], center: [1, 1, 3, 2] }]);
+  assert.deepEqual(a.grid, [0, 0]);
+  assert.deepEqual(readAseprite(buildExport(blobTemplate(), "t", { format: "aseprite" })[0].data).grid, [4, 4]);
+});
+
+test("pattern op repeats a tile of rows over a box", () => {
+  const doc = make(7, 3);
+  applyOps(doc, 0, "main", [
+    { op: "rect", x: 0, y: 0, w: 7, h: 3, color: "1", fill: true },
+    { op: "pattern", x: 1, y: 0, w: 6, h: 3, rows: ["23_", "4.5"] },
+  ]);
+  assert.deepEqual(rows(doc), ["1231231", "14.54.5", "1231231"]);
+  assert.throws(() => applyOps(doc, 0, "main", [{ op: "pattern", x: 0, y: 0, w: 2, h: 2, rows: ["12", "3"] }]), /same length/);
+});
+
+test("viewer: paint strokes and undo over HTTP; foreign origins are refused", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dotquill-viewer-"));
+  const ws = new Workspace(dir);
+  const viewer = await startViewer(ws, { port: 7480 + Math.floor(Math.random() * 400) });
+  try {
+    const doc = make(4, 2);
+    writeRows(doc, 0, "main", ["1111", "...."]);
+    await ws.save("pic", doc);
+    const post = (p: string, body: unknown, headers: Record<string, string> = {}) =>
+      fetch(new URL(p, viewer.url), { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    const stroke = { name: "pic", frame: 0, layer: "main", color: 2, points: [[0, 1], [1, 1], [9, 9]] };
+    assert.equal((await post("/api/paint", stroke, { Origin: "http://evil.example" })).status, 403);
+    assert.equal((await post("/api/paint", { ...stroke, color: 99 })).status, 400);
+    assert.equal((await post("/api/paint", stroke)).status, 200);
+    assert.deepEqual(rows(await ws.load("pic")), ["1111", "22.."]);
+    await post("/api/paint", { ...stroke, color: -1, points: [[0, 0]] });
+    assert.deepEqual(rows(await ws.load("pic")), [".111", "22.."]);
+    const undo = (await (await post("/api/undo", { name: "pic" })).json()) as { undone: boolean };
+    assert.equal(undo.undone, true);
+    assert.deepEqual(rows(await ws.load("pic")), ["1111", "22.."]);
+  } finally {
+    await viewer.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("formatGrid adds rulers", () => {

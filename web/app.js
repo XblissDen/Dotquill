@@ -21,6 +21,10 @@ const state = {
   hidden: new Set(),
   hot: -1,
   map: null, // { key, img } test map of a blob tileset
+  tool: "view", // view | pencil | eraser
+  color: 0, // palette index for the pencil
+  paintLayer: null,
+  stroke: null, // { name, frame, layer, color, points: Map, last }
 };
 
 // ---------- utils ----------
@@ -381,7 +385,9 @@ function renderInspector() {
         renderInspector();
         render();
       };
-      return el("li", {}, [el("label", { className: "check" }, [cb, l.visible ? l.name : `${l.name} (hidden in file)`])]);
+      const target = el("input", { type: "radio", name: "paintLayer", checked: l.name === state.paintLayer, title: "Paint on this layer" });
+      target.onchange = () => (state.paintLayer = l.name);
+      return el("li", {}, [target, el("label", { className: "check" }, [cb, l.visible ? l.name : `${l.name} (hidden in file)`])]);
     }),
   );
 
@@ -392,11 +398,12 @@ function renderInspector() {
       const light = 0.299 * r + 0.587 * g + 0.114 * b > 140;
       const count = used.get(i) || 0;
       const sw = el("div", {
-        className: `swatch${count ? "" : " unused"}`,
+        className: `swatch${count ? "" : " unused"}${i === state.color ? " selected" : ""}`,
         textContent: ALPHABET[i],
-        title: `"${ALPHABET[i]}" ${hex} · ${count} px`,
+        title: `"${ALPHABET[i]}" ${hex} · ${count} px · click to paint with it`,
       });
       sw.style.background = hex;
+      sw.onclick = () => setColor(i, true);
       sw.style.setProperty("--sw-ink", light ? "rgba(0,0,0,.6)" : "rgba(255,255,255,.75)");
       sw.onmouseenter = () => {
         state.hot = i;
@@ -437,9 +444,15 @@ async function select(name, { refresh = false } = {}) {
     } else {
       state.frame = Math.min(state.frame, doc.frames.length - 1);
     }
+    if (switched || !doc.layers.some((l) => l.name === state.paintLayer)) {
+      // Paint on the top visible layer by default.
+      state.paintLayer = ([...doc.layers].reverse().find((l) => l.visible) ?? doc.layers[0]).name;
+    }
+    if (state.color >= doc.palette.length) state.color = 0;
     buildFrames();
     buildTimeline();
     renderInspector();
+    updateColorChip();
     renderAssetList();
     render();
     if (refresh) {
@@ -532,6 +545,154 @@ async function doExport(mode) {
   }
 }
 
+// ---------- editing ----------
+
+function setTool(tool) {
+  state.tool = tool;
+  for (const [id, t] of [
+    ["toolView", "view"],
+    ["toolPencil", "pencil"],
+    ["toolEraser", "eraser"],
+  ]) {
+    $(id).classList.toggle("active", t === tool);
+  }
+  canvas.classList.toggle("paint", tool !== "view");
+  updateColorChip();
+}
+
+function setColor(i, pickPencil = false) {
+  state.color = i;
+  if (pickPencil && state.tool === "eraser") setTool("pencil");
+  for (const sw of $("palette").children) sw.classList.toggle("selected", sw.textContent === ALPHABET[i]);
+  updateColorChip();
+}
+
+function updateColorChip() {
+  const hex = state.doc?.palette[state.color];
+  $("curColor").style.background = state.tool === "eraser" || !hex ? "" : hex;
+  $("curColor").title =
+    state.tool === "eraser"
+      ? "Eraser: paints transparent pixels"
+      : `Paint color "${ALPHABET[state.color]}" ${hex ?? ""}: click a palette swatch, or Alt+click the canvas`;
+}
+
+/** Pixel under the mouse (wraps in tile 3×3 mode); null outside the art or in map mode. */
+function pixelAt(e) {
+  const d = state.doc;
+  if (!d || mapMode()) return null;
+  const rect = canvas.getBoundingClientRect();
+  const fx = (e.clientX - rect.left) / rect.width;
+  const fy = (e.clientY - rect.top) / rect.height;
+  if (fx < 0 || fy < 0 || fx >= 1 || fy >= 1) return null;
+  return { x: Math.floor(fx * d.width * reps()) % d.width, y: Math.floor(fy * d.height * reps()) % d.height };
+}
+
+/** Paints one pixel into the stroke and the local preview (the saved file arrives back through live updates). */
+function strokePixel(x, y) {
+  const s = state.stroke;
+  const key = y * state.doc.width + x;
+  if (s.points.has(key)) return;
+  s.points.set(key, [x, y]);
+  state.frames[s.frame][key] = s.color;
+  const g = state.bitmaps[s.frame].getContext("2d");
+  if (s.color < 0) g.clearRect(x, y, 1, 1);
+  else {
+    g.fillStyle = state.doc.palette[s.color];
+    g.fillRect(x, y, 1, 1);
+  }
+}
+
+function strokeTo(p) {
+  const s = state.stroke;
+  let [x0, y0] = s.last;
+  const [x1, y1] = [p.x, p.y];
+  // Bresenham, so fast mouse moves leave no gaps.
+  const dx = Math.abs(x1 - x0);
+  const dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    strokePixel(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
+  s.last = [x1, y1];
+  render();
+}
+
+async function endStroke() {
+  const s = state.stroke;
+  state.stroke = null;
+  window.removeEventListener("mousemove", onStrokeMove);
+  if (!s || !s.points.size) return;
+  try {
+    await getJSON("/api/paint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: s.name, frame: s.frame, layer: s.layer, color: s.color, points: [...s.points.values()] }),
+    });
+  } catch (e) {
+    toast(e.message, "error");
+    if (state.name === s.name) select(s.name, { refresh: true });
+  }
+}
+
+function onStrokeMove(e) {
+  const p = pixelAt(e);
+  if (p && state.stroke) strokeTo(p);
+}
+
+async function undo() {
+  if (!state.name) return;
+  try {
+    const r = await getJSON("/api/undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: state.name }),
+    });
+    toast(r.undone ? `Undone (${r.left} more step${r.left === 1 ? "" : "s"})` : "Nothing to undo");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  const p = pixelAt(e);
+  if (!p) return;
+  const d = state.doc;
+  if (e.altKey) {
+    // Eyedropper.
+    const v = state.frames[state.frame][p.y * d.width + p.x];
+    if (v >= 0) setColor(v, true);
+    e.preventDefault();
+    return;
+  }
+  if (state.tool === "view") return;
+  e.preventDefault();
+  play(false);
+  state.stroke = {
+    name: state.name,
+    frame: state.frame,
+    layer: state.paintLayer,
+    color: state.tool === "eraser" ? -1 : state.color,
+    points: new Map(),
+    last: [p.x, p.y],
+  };
+  strokeTo(p);
+  window.addEventListener("mousemove", onStrokeMove);
+});
+window.addEventListener("mouseup", () => state.stroke && endStroke());
+
 // ---------- live updates ----------
 
 let listTimer = 0;
@@ -586,6 +747,10 @@ $("tagSel").onchange = () => {
   state.frame = a;
   render();
 };
+$("toolView").onclick = () => setTool("view");
+$("toolPencil").onclick = () => setTool("pencil");
+$("toolEraser").onclick = () => setTool("eraser");
+$("undo").onclick = undo;
 $("expDownload").onclick = () => doExport("download");
 $("expSave").onclick = () => doExport("save");
 window.addEventListener("resize", () => state.fit && render());
@@ -619,6 +784,16 @@ canvas.addEventListener(
   { passive: false },
 );
 
+/**
+ * The shortcut letter of a key press: the typed Latin letter (works on AZERTY and other Latin layouts),
+ * or, on non-Latin layouts such as Russian, the letter of the physical key (KeyZ → "z").
+ */
+function shortcutKey(e) {
+  if (/^[a-z]$/i.test(e.key)) return e.key.toLowerCase();
+  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3).toLowerCase();
+  return e.key;
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   const d = state.doc;
@@ -628,7 +803,23 @@ window.addEventListener("keydown", (e) => {
     $(id).checked = !$(id).checked;
     $(id).dispatchEvent(new Event("change"));
   };
-  switch (e.key) {
+  const key = shortcutKey(e);
+  if ((e.ctrlKey || e.metaKey) && key === "z") {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (key) {
+    case "v":
+      setTool("view");
+      break;
+    case "p":
+      setTool("pencil");
+      break;
+    case "e":
+      setTool("eraser");
+      break;
     case "ArrowRight":
       play(false);
       state.frame = (state.frame + 1) % n;

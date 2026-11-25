@@ -1,18 +1,28 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import gifenc from "gifenc";
+import { toAseprite } from "./aseprite.ts";
 import { Bitmap, paletteRGB } from "./bitmap.ts";
 import type { PixelDoc } from "./doc.ts";
 import { marginsOf, type Rect } from "./slices.ts";
 import { blobTiles, E, gridTiles, N, NE, NW, S, SE, SW, VARIANT_PROBABILITY, W as WEST } from "./tileset.ts";
 import { VERSION } from "./version.ts";
 
-export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox" | "godot-spriteframes" | "godot-tileset";
+export type ExportFormat =
+  | "png"
+  | "frames"
+  | "sheet"
+  | "gif"
+  | "aseprite"
+  | "godot-stylebox"
+  | "godot-spriteframes"
+  | "godot-tileset";
 export const EXPORT_FORMATS: readonly ExportFormat[] = [
   "png",
   "frames",
   "sheet",
   "gif",
+  "aseprite",
   "godot-stylebox",
   "godot-spriteframes",
   "godot-tileset",
@@ -388,6 +398,9 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
         { path: `${folder}${base}_tileset${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
       ];
     }
+    case "aseprite":
+      // An editable source file: always 1×, all frames, layers, tags and slices.
+      return [{ path: `${name}.aseprite`, data: toAseprite(doc), mime: "application/octet-stream" }];
     case "gif": {
       const frames = selectFrames(doc, o.tag);
       const gifPalette = [[0, 0, 0], ...pal.map((c) => [c[0], c[1], c[2]])];

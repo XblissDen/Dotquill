@@ -47,12 +47,13 @@ A panel and a button with normal, hover and pressed states, resized through thei
 
 ## Features
 
-- **Drawing**: pixel rows, lines, rectangles, ellipses, flood fill, color replace, outlines, mirroring, flip, shift, copy/move regions, dithering, and `onlyOn` masks for shading inside a shape.
+- **Drawing**: pixel rows, lines, rectangles, ellipses, flood fill, color replace, outlines, mirroring, flip, shift, copy/move regions, dithering, repeating patterns, and `onlyOn` masks for shading inside a shape.
 - **Animation**: frames, durations, tags (idle, walk…), playback and onion skin in the viewer.
 - **Layers**: add, reorder, hide, merge.
 - **Terrain tilesets with autotiling**: draw a 7×3-tile template (an island and a ring around a hole), get all 47 "blob" tiles an engine needs; a test-map preview shows seams before you export.
 - **Pixel UI (9-slice)**: panels, buttons and bars with fixed corners and stretching or tiling edges; button states as frames; resize check in the preview.
-- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `SpriteFrames` (one animation per tag), `TileSet` (terrain autotiling, optional collision) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
+- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, editable `.aseprite` (layers, tags, slices), Godot `SpriteFrames` (one animation per tag), `TileSet` (terrain autotiling, optional collision) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
+- **Touch-ups in the viewer**: pencil, eraser, eyedropper and undo, for the pixel you want changed right now.
 - **Import**: PNG to asset, with palette quantization, sheet slicing and downscaling of upscaled art.
 
 ## Requirements
@@ -99,6 +100,8 @@ npm run viewer -- --dir /path/to/dotquill-art --open
 
 Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `o` onion skin, `t` tile 3×3, `s` 9-slice guides, `m` test map (tilesets). Hover a palette swatch to highlight its pixels.
 
+Touch-ups: `p` pencil, `e` eraser, `v` back to view only. Click a palette swatch to pick the color, or `Alt`+click the canvas. The pencil paints on the layer marked ● in the Layers panel. Each stroke is saved right away as one undo step; `Ctrl+Z` undoes the last saved change, yours or Claude's.
+
 ## Tools
 
 | Tool | What it does |
@@ -107,14 +110,14 @@ Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `
 | `create_asset` | New canvas with a palette, layers and frames; returns the palette legend. `tileset` makes a blob autotile template or a grid of tiles. |
 | `get_asset` | Pixel rows with x/y rulers, palette legend, frames and tags. |
 | `write_pixels` | Write rows of palette characters at (x, y); `.` transparent, `_` keep. |
-| `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline (with `refresh` to rebuild after moving parts), mirror, flip, shift, clear, copy, dither (+ `onlyOn` masks). One frame, a list of `frames`, or `allFrames`. |
+| `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline (with `refresh` to rebuild after moving parts), mirror, flip, shift, clear, copy, dither, pattern (+ `onlyOn` masks). One frame, a list of `frames`, or `allFrames`. |
 | `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, 9-slice guides, `tile` mode, `diff` mode (marks pixels changed since the previous frame), `stretch` mode (resizes UI through its 9-slice), `tilemap` mode (paints a tileset onto a test map). |
 | `palette` | Presets, switch palette (nearest or index remap), edit or add colors. |
 | `frames` | Add/copy, delete, move frames, durations, tags. |
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
 | `slices` | Named regions; with `nine` margins a 9-slice for UI (`stretch` or `tile`). |
 | `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
-| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-tileset` (atlas + `TileSet` `.tres` with terrain, optional collision), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
+| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `aseprite`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-tileset` (atlas + `TileSet` `.tres` with terrain, optional collision), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
 | `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes, set or remove tileset settings. |
 | `open_viewer` | Open the live viewer in the browser. |
@@ -173,7 +176,7 @@ npm run smoke       # drives the real MCP server through an MCP client; writes p
 npm run docs        # renders the README images in docs/ from examples/
 ```
 
-Roadmap ideas: Tiled exports, `.aseprite` export, animated tiles, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
+Roadmap ideas: Tiled exports, animated tiles, palette ramp tools, optional local diffusion backend (ComfyUI) with palette quantization.
 
 ## License
 

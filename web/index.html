@@ -33,6 +33,13 @@
             <button id="zoomLabel" class="zoom" title="Fit (0)">8×</button>
             <button id="zoomIn" title="Zoom in (+)">+</button>
           </div>
+          <div class="group" id="tools">
+            <button id="toolView" class="active" title="View only (v)">View</button>
+            <button id="toolPencil" title="Pencil (p): paint with the selected color. Alt+click picks a color from the canvas.">Pencil</button>
+            <button id="toolEraser" title="Eraser (e)">Eraser</button>
+          </div>
+          <span id="curColor" class="cur-color" title="Paint color: click a palette swatch, or Alt+click the canvas"></span>
+          <button id="undo" title="Undo the last saved change, yours or Claude's (Ctrl+Z)">Undo</button>
           <label class="check"><input type="checkbox" id="grid" checked /> Grid</label>
           <label class="check"><input type="checkbox" id="onion" /> Onion skin</label>
           <label class="check"><input type="checkbox" id="tile" /> Tile 3×3</label>
@@ -68,7 +75,7 @@
           <dl id="meta" class="meta"></dl>
         </section>
         <section>
-          <h2>Layers <small>view only</small></h2>
+          <h2>Layers <small>● = paint here</small></h2>
           <ul id="layers" class="layers"></ul>
         </section>
         <section>

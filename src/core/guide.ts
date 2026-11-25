@@ -24,6 +24,8 @@ Tool tips:
 - Shade inside a shape without leaking: e.g. ellipse in the shadow color with onlyOn: [body color].
 - write_pixels/draw accept preview:true to get the image back in the same call.
 - draw takes frames: [..] (or allFrames) to apply the same ops to several frames in one call.
+- draw op pattern repeats a small tile of rows over a box (a grass strip along a tileset row, bricks, a border): no long hand-typed rows to miscount.
+- The user can touch up pixels in the viewer (pencil, eraser, undo). After they say they changed something, get_asset before editing those pixels.
 - Layers are optional; one layer is fine for small sprites. Layers are listed bottom → top.
 - The palette is locked. Pick tones by the L value (lightness 0–100) in the legend.
 - Keep the asset notes current (manage_asset action "notes"): intent, light direction, what the animation does.
@@ -80,7 +82,7 @@ Tool tips:
 Terrain with autotiling (grass, dirt, water, walls): a blob tileset.
 - create_asset with tileset {tile: 16, terrain: "grass"} makes a 7×3-tile template (112×48 at 16 px). Dotquill builds all 47 tiles an engine needs from it.
 - Layout (tile col,row): cols 0–2 are a 3×3 island (outer corners, edges, center (1,1)). Cols 3–5 are solid terrain around one empty cell, the hole (4,1): its four corner cells become the inner corners. Col 6: optional center variants (cracks, flowers), each used about 20% as often as the center.
-- Steps: (1) draw the center tile (1,1) seamless. (2) Copy it into every cell of cols 0–5 except the hole (draw op copy). (3) Draw the same border along the outside of the island and around the inside of the hole: outline, lip, shadow. Cols 3–5 continue into terrain on their outside: no border there. Keep border art inside the outer half of each tile: missing tiles are built from quarter tiles cut at the half lines. (4) render_preview tilemap:true paints a test map with all 47 tiles: fix seams, broken outlines and repetition. audit lists quarters that differ from the copies the built tiles use.
+- Steps: (1) draw the center tile (1,1) seamless. (2) Copy it into every cell of cols 0–5 except the hole (draw op copy). (3) Draw the same border along the outside of the island and around the inside of the hole: outline, lip, shadow (draw op pattern repeats one tile's border rows along a row of tiles). Cols 3–5 continue into terrain on their outside: no border there. Keep border art inside the outer half of each tile: missing tiles are built from quarter tiles cut at the half lines. (4) render_preview tilemap:true paints a test map with all 47 tiles: fix seams, broken outlines and repetition. audit lists quarters that differ from the copies the built tiles use.
 - The empty side is transparent: put the ground underneath on a lower layer (in Godot a second TileMapLayer).
 - Side-view platforms: grass lip on the top edge, darker toward the bottom; export with collision:true.
 - Export format "godot-tileset": atlas PNG + TileSet .tres with the terrain set up, so Godot picks the right tile per painted cell. Use an outDir inside the Godot project.
