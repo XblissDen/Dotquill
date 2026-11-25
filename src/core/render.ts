@@ -12,6 +12,8 @@ export interface PreviewOptions {
   layer?: string;
   /** Repeat the frame 3×3 to check seamless tiles. */
   tile?: boolean;
+  /** Outline pixels that changed since the previous frame (frame 0 vs the last). */
+  diff?: boolean;
 }
 
 export interface Preview {
@@ -29,6 +31,8 @@ const BORDER: RGBA = [110, 110, 125, 255];
 const GRID_MINOR: RGBA = [128, 128, 140, 70];
 const GRID_MAJOR: RGBA = [0, 190, 255, 150];
 const TILE_MARK: RGBA = [255, 138, 76, 210];
+const DIFF_MARK: RGBA = [255, 0, 200, 255];
+const DIFF_FILL: RGBA = [255, 0, 200, 150];
 export const MAX_PREVIEW_FRAMES = 16;
 
 function rulerStep(zoom: number, maxCoord: number, fs: number): number {
@@ -80,6 +84,9 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
   const composites = frames.map((f) => doc.composite(f, layer ? { layer } : {}));
   const x0 = margin + rulerLeft;
   const y0 = margin + rulerTop;
+  const total = doc.frames.length;
+  const diff = !!opts.diff && total > 1;
+  const changed: number[] = [];
 
   composites.forEach((comp, k) => {
     const px = x0 + k * (pw + gap);
@@ -94,6 +101,21 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
       for (let j = 1; j < ch; j++) bmp.fillRect(px, y0 + j * zoom, pw, 1, j % 8 === 0 ? GRID_MAJOR : GRID_MINOR);
     }
     if (tile) bmp.strokeRect(px + W * zoom, y0 + H * zoom, W * zoom, H * zoom, TILE_MARK);
+    if (diff) {
+      const prev = doc.composite((frames[k] - 1 + total) % total, layer ? { layer } : {});
+      const ox = px + (tile ? W * zoom : 0);
+      const oy = y0 + (tile ? H * zoom : 0);
+      let count = 0;
+      for (let i = 0; i < comp.length; i++) {
+        if (comp[i] === prev[i]) continue;
+        count++;
+        const cx = ox + (i % W) * zoom;
+        const cy = oy + Math.floor(i / W) * zoom;
+        if (zoom >= 4) bmp.strokeRect(cx, cy, zoom, zoom, DIFF_MARK);
+        else bmp.fillRect(cx, cy, zoom, zoom, DIFF_FILL);
+      }
+      changed.push(count);
+    }
     if (rulers) {
       for (let x = 0; x < W; x += step) {
         const s = String(x);
@@ -129,6 +151,13 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
     grid ? "Thin grid line per pixel, blue line every 8 px." : "",
     solid ? `Background ${opts.background}.` : "Checkerboard = transparent.",
     small.length ? "Bottom row: same frames at actual size, 1× then 2×." : "",
+    diff
+      ? `Magenta squares = pixels changed since the previous frame (frame 0 vs ${total - 1}): ` +
+        frames.map((f, k) => `f${f} ${changed[k]} px`).join(", ") +
+        "."
+      : opts.diff
+        ? "diff ignored: the asset has a single frame."
+        : "",
     hidden > 0 && !opts.frames?.length ? `${hidden} more frame(s) not shown; pass frames to see them.` : "",
   ]
     .filter(Boolean)

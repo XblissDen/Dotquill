@@ -73,15 +73,15 @@ Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `
 | `create_asset` | New canvas with a palette, layers and frames; returns the palette legend. |
 | `get_asset` | Pixel rows with x/y rulers, palette legend, frames and tags. |
 | `write_pixels` | Write rows of palette characters at (x, y); `.` transparent, `_` keep. |
-| `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline, mirror, flip, shift, clear, copy, dither (+ `onlyOn` masks). |
-| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, `tile` mode. |
+| `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline (with `refresh` to rebuild after moving parts), mirror, flip, shift, clear, copy, dither (+ `onlyOn` masks). One frame, a list of `frames`, or `allFrames`. |
+| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, `tile` mode, `diff` mode (marks pixels changed since the previous frame). |
 | `palette` | Presets, switch palette (nearest or index remap), edit or add colors. |
 | `frames` | Add/copy, delete, move frames, durations, tags. |
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
-| `audit` | Stray pixels, edge contact, empty frames, animation jitter, color usage. |
+| `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
 | `export` | `png`, `frames`, `sheet` (+ JSON), `gif`; scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
-| `manage_asset` | Duplicate, rename, delete (to trash), undo. |
+| `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes. |
 | `open_viewer` | Open the live viewer in the browser. |
 
 ## Files

@@ -49,7 +49,7 @@ async function call(name: string, args: Record<string, unknown>, expectError = f
   return text;
 }
 
-const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported"];
+const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported", "smoke/anim"];
 // Leftovers from an interrupted run (errors ignored).
 for (const n of SCRATCH) await client.callTool({ name: "manage_asset", arguments: { action: "delete", name: n } });
 
@@ -163,6 +163,30 @@ await call("import_png", {
 });
 const imported = await call("get_asset", { name: "smoke/imported", frame: 1, rulers: false });
 assert.ok(imported.includes(squash.join("\n")), "import should reproduce the squash frame exactly");
+
+// Animation helpers: ops on a list of frames, outline refresh, diff preview, notes.
+await call("create_asset", { name: "smoke/anim", width: 10, height: 10, frames: 3, overwrite: true });
+await call("draw", {
+  name: "smoke/anim",
+  allFrames: true,
+  ops: [
+    { op: "rect", x: 2, y: 2, w: 4, h: 4, color: "m", fill: true },
+    { op: "outline", color: "p" },
+  ],
+});
+const multi = await call("draw", {
+  name: "smoke/anim",
+  frames: [1, 2],
+  ops: [
+    { op: "copy", x: 2, y: 2, w: 4, h: 4, toX: 3, toY: 2, cut: true },
+    { op: "outline", color: "p", refresh: true },
+  ],
+});
+assert.match(multi, /frame 1:.*\nframe 2:/);
+const diffed = await call("render_preview", { name: "smoke/anim", diff: true });
+assert.match(diffed, /Magenta squares.*f0 \d+ px, f1 \d+ px, f2 0 px/);
+await call("manage_asset", { action: "notes", name: "smoke/anim", notes: "Box slides right on frames 1-2." });
+assert.match(await call("get_asset", { name: "smoke/anim" }), /Notes: Box slides right/);
 await call("list_assets", {});
 for (const n of SCRATCH) await call("manage_asset", { action: "delete", name: n });
 

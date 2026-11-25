@@ -21,8 +21,10 @@ Tool tips:
 - Front-facing symmetric art: draw the left half, then draw op mirror (axis "x").
 - Shade inside a shape without leaking: e.g. ellipse in the shadow color with onlyOn: [body color].
 - write_pixels/draw accept preview:true to get the image back in the same call.
+- draw takes frames: [..] (or allFrames) to apply the same ops to several frames in one call.
 - Layers are optional; one layer is fine for small sprites. Layers are listed bottom → top.
 - The palette is locked. Pick tones by the L value (lightness 0–100) in the legend.
+- Keep the asset notes current (manage_asset action "notes"): intent, light direction, what the animation does.
 - When done, tell the user the asset name. They watch it live in the viewer (open_viewer).`,
 
   sprites: `# Characters, items and objects
@@ -54,16 +56,18 @@ Tool tips:
 - Outline styles: (1) one dark color everywhere: classic, most readable, the safe default for game sprites ≤ 32 px; (2) the darkest tone of each material: softer; (3) selective outline (selout): lighter on the lit side.
 - draw op "outline" adds an outer outline around all opaque pixels (corners:false gives a rounder 4-connected outline). Draw interior lines (an arm in front of the body) by hand.
 - After an automatic outline, remove pixels that make doubles at concave corners.
+- Moved or reshaped an outlined part (animation, flaring cape)? Use outline with refresh:true: it removes the old outer ring of that color and outlines again, closing gaps. Interior pixels of the same color are kept.
 - Anti-aliasing: an in-between tone inside a jagged step on curves; never anti-alias the outer edge of a sprite used on varied backgrounds.`,
 
   animation: `# Animation
 - Timing: idle 2–4 frames at 150–250 ms; walk 4–8 frames at 80–120 ms; run 6–8 at 60–90 ms; attack 3–6 frames: long anticipation, very short strike (40–60 ms), then a hold; hurt 2–3 frames.
-- Workflow: finish frame 0 first, then frames → add with copyFrom 0 and change only what moves. Move parts with draw op "copy" (cut:true) or "shift".
+- Workflow: finish frame 0 first, then frames → add with copyFrom 0 and change only what moves. Move parts with draw op "copy" (cut:true) or "shift"; shared changes go to several frames at once with draw frames: [..].
+- Moving a region of an outlined sprite breaks the outline at the seams: finish each frame with outline refresh:true. Keep feet, planted weapons and other anchored parts out of moved regions.
 - Keep volume: squash and stretch should roughly preserve area. Keep the canvas size and the feet baseline fixed to avoid jitter.
 - Idle breathing: torso and head 1 px down on one frame and back; hair, capes and tails follow one frame later.
 - 4-frame side-view walk: contact, passing (body 1 px up), contact (other leg forward), passing. Arms swing opposite to legs.
 - Name ranges with tags (frames → tag): idle, walk, attack. Sheet exports keep tags (Aseprite JSON frameTags).
-- render_preview shows all frames side by side; the viewer plays the animation; audit reports bounding-box changes (unexpected jumps mean jitter).`,
+- render_preview shows all frames side by side; diff:true outlines in magenta every pixel that changed since the previous frame, so you can confirm that only the intended parts move. The viewer plays the animation; audit reports bounding-box changes (unexpected jumps mean jitter).`,
 
   tiles: `# Tiles and tilesets
 - Sizes: 16×16 standard, 8×8 very retro, 32×32 detailed. One size for a whole tileset.

@@ -24,7 +24,14 @@ export type DrawOp =
   | ({ op: "ellipse"; x: number; y: number; w: number; h: number; color: ColorArg; fill?: boolean | undefined } & Masked)
   | { op: "fill"; x: number; y: number; color: ColorArg; contiguous?: boolean | undefined }
   | { op: "replace"; from: ColorArg; to: ColorArg; region?: Region | undefined }
-  | { op: "outline"; color: ColorArg; mode?: "outer" | "inner" | undefined; corners?: boolean | undefined }
+  | {
+      op: "outline";
+      color: ColorArg;
+      mode?: "outer" | "inner" | undefined;
+      corners?: boolean | undefined;
+      /** Outer only: first remove pixels of this color that touch empty space, then outline again. */
+      refresh?: boolean | undefined;
+    }
   | { op: "mirror"; axis: "x" | "y"; from?: "left" | "right" | "top" | "bottom" | undefined }
   | { op: "flip"; axis: "x" | "y" }
   | { op: "shift"; dx: number; dy: number; wrap?: boolean | undefined }
@@ -259,9 +266,21 @@ function applyOp(ctx: Ctx, cel: Int16Array, op: DrawOp): void {
     }
     case "outline": {
       const c = col(op.color);
-      const src = cel.slice();
       const nb = op.corners ? N8 : N4;
       const outer = (op.mode ?? "outer") === "outer";
+      if (op.refresh) {
+        // Rebuild after parts moved: peel the old outer ring (this color touching empty space or the edge).
+        if (!outer) throw new Error('refresh works with mode "outer" only.');
+        if (c < 0) throw new Error("refresh needs an opaque outline color.");
+        const old = cel.slice();
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (old[y * W + x] !== c) continue;
+            if (N4.some(([dx, dy]) => !inb(x + dx, y + dy) || old[(y + dy) * W + x + dx] < 0)) cel[y * W + x] = TRANSPARENT;
+          }
+        }
+      }
+      const src = cel.slice();
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
           const v = src[y * W + x];

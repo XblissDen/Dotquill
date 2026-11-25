@@ -172,6 +172,10 @@ const zOp = z.discriminatedUnion("op", [
     color: zColor,
     mode: z.enum(["outer", "inner"]).optional().describe("outer (default): around opaque pixels; inner: on their edge."),
     corners: z.boolean().optional().describe("Include diagonal neighbors (8-connected). Default false = rounder."),
+    refresh: z
+      .boolean()
+      .optional()
+      .describe("Rebuild: remove this color where it touches empty space, then outline again. Use after moving or reshaping outlined parts (fixes gaps and doubles)."),
   }),
   z.object({
     op: z.literal("mirror"),
@@ -411,12 +415,13 @@ server.registerTool(
   {
     title: "Draw operations",
     description:
-      "Applies drawing ops in order to one frame/layer: pixel, line (polyline), rect, ellipse, fill, replace, outline, mirror, flip, shift, clear, copy, dither. Colors are legend characters, indices, palette hex or \".\". Most ops accept onlyOn to paint only over certain colors (great for shading inside a shape).",
+      "Applies drawing ops in order to one layer of one frame, a list of frames, or all frames: pixel, line (polyline), rect, ellipse, fill, replace, outline, mirror, flip, shift, clear, copy, dither. Colors are legend characters, indices, palette hex or \".\". Most ops accept onlyOn to paint only over certain colors (great for shading inside a shape).",
     inputSchema: {
       name: zName,
       ops: z.array(zOp).min(1),
       frame: zInt.optional().describe("Default 0."),
-      allFrames: z.boolean().optional().describe("Apply the same ops to every frame."),
+      frames: z.array(zInt).min(1).optional().describe("Apply the same ops to each of these frames (overrides frame)."),
+      allFrames: z.boolean().optional().describe("Apply the same ops to every frame (overrides frames)."),
       layer: z.string().optional().describe("Default: bottom layer."),
       preview: z.boolean().optional().describe("Return a rendered preview of the (first) frame."),
     },
@@ -425,7 +430,11 @@ server.registerTool(
     run(async () => {
       const { doc, result, name } = await edit(a.name, (d) => {
         const layer = d.resolveLayer(a.layer);
-        const frames = a.allFrames ? d.frames.map((_, i) => i) : [d.checkFrame(a.frame ?? 0)];
+        const frames = a.allFrames
+          ? d.frames.map((_, i) => i)
+          : a.frames?.length
+            ? [...new Set(a.frames.map((f) => d.checkFrame(f)))]
+            : [d.checkFrame(a.frame ?? 0)];
         const lines: string[] = [];
         for (const f of frames) {
           const r = applyOps(d, f, layer, a.ops as DrawOp[]);
@@ -443,7 +452,7 @@ server.registerTool(
   {
     title: "Render preview",
     description:
-      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles.",
+      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles and diff:true to check animation.",
     inputSchema: {
       name: zName,
       frames: z.array(zInt).optional().describe("Frames to show (default all, max 16)."),
@@ -452,6 +461,10 @@ server.registerTool(
       background: z.string().optional().describe('"checker" (default) or #rrggbb, e.g. the game background color.'),
       layer: z.string().optional().describe("Show only this layer."),
       tile: z.boolean().optional().describe("Repeat 3×3 to check seams."),
+      diff: z
+        .boolean()
+        .optional()
+        .describe("Outline (magenta) every pixel that changed since the previous frame; frame 0 is compared with the last. Lists changed-pixel counts."),
     },
     annotations: { readOnlyHint: true },
   },
@@ -466,6 +479,7 @@ server.registerTool(
         ...(a.background ? { background: a.background } : {}),
         ...(a.layer !== undefined ? { layer: a.layer } : {}),
         ...(a.tile ? { tile: true } : {}),
+        ...(a.diff ? { diff: true } : {}),
       });
       return ok(`${summary(name, doc)}\n${p.description}`, [imageContent(p.png)]);
     }),
@@ -806,17 +820,25 @@ server.registerTool(
   {
     title: "Manage asset",
     description:
-      'duplicate (to a new name, e.g. for variants), rename, delete (moved to .dotquill/trash), or undo (restore the previous saved version; repeatable).',
+      'duplicate (to a new name, e.g. for variants), rename, delete (moved to .dotquill/trash), undo (restore the previous saved version; repeatable), or notes (replace the intent/style notes; keep them in sync with the art).',
     inputSchema: {
-      action: z.enum(["duplicate", "rename", "delete", "undo"]),
+      action: z.enum(["duplicate", "rename", "delete", "undo", "notes"]),
       name: zName,
       to: zName.optional().describe("New name for duplicate/rename."),
+      notes: z.string().max(2000).optional().describe('For notes: the new text ("" clears).'),
     },
   },
   async (a) =>
     run(async () => {
       const name = validateName(a.name);
       switch (a.action) {
+        case "notes": {
+          if (a.notes === undefined) throw new Error('notes needs "notes" (use "" to clear).');
+          await edit(name, (d) => {
+            d.notes = a.notes!.trim();
+          });
+          return ok(a.notes.trim() ? `Notes of "${name}" updated.` : `Notes of "${name}" cleared.`);
+        }
         case "duplicate":
         case "rename": {
           if (!a.to) throw new Error(`${a.action} needs "to".`);

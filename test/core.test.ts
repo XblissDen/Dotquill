@@ -166,6 +166,48 @@ test("workspace: save, list, undo, rename, delete", async () => {
   }
 });
 
+test("outline refresh rebuilds the ring after a part moves and keeps interior pixels", () => {
+  const block = (doc: PixelDoc, x: number) => {
+    applyOps(doc, 0, "main", [{ op: "rect", x, y: 1, w: 3, h: 3, color: "6", fill: true }]);
+    writeRows(doc, 0, "main", ["1"], x + 1, 2); // interior pixel in the outline color
+  };
+  const moved = make(9, 5);
+  block(moved, 2);
+  applyOps(moved, 0, "main", [{ op: "outline", color: "1" }]);
+  // Move only the block, not its outline: leaves a detached ring on the left and no outline on the right.
+  applyOps(moved, 0, "main", [{ op: "copy", x: 2, y: 1, w: 3, h: 3, toX: 3, toY: 1, cut: true }]);
+  applyOps(moved, 0, "main", [{ op: "outline", color: "1", refresh: true }]);
+
+  const fresh = make(9, 5);
+  block(fresh, 3);
+  applyOps(fresh, 0, "main", [{ op: "outline", color: "1" }]);
+  assert.deepEqual(rows(moved), rows(fresh));
+  assert.equal(rows(moved)[2], "..16161..");
+  assert.throws(() => applyOps(moved, 0, "main", [{ op: "outline", color: "1", mode: "inner", refresh: true }]), /outer/);
+});
+
+test("audit separates highlights from suspicious lone pixels and dedupes frames", () => {
+  const doc = make(10, 10, { frames: 2 });
+  for (const f of [0, 1]) {
+    writeRows(doc, f, "main", ["ccc.000", "090.0c0", "000.000"], 1, 1); // (2,2) mid-tone suspect, (6,2) highlight
+    writeRows(doc, f, "main", ["4"], 8, 8); // stray
+  }
+  const report = audit(doc, "t");
+  assert.match(report, /Stray pixels.*: 1: \(8,8\) \[all frames\]/);
+  assert.match(report, /Lone mid-tone pixels.*: 1: \(2,2\)="9" \[all frames\]/);
+  assert.match(report, /1 lone highlight\(s\)/);
+  assert.match(report, /Bounding box is the same in every frame/);
+});
+
+test("preview diff counts pixels changed since the previous frame", () => {
+  const doc = make(4, 4, { frames: 3 });
+  for (const f of [0, 1, 2]) writeRows(doc, f, "main", ["1111"]);
+  writeRows(doc, 1, "main", ["22"], 0, 2);
+  const p = renderPreview(doc, { diff: true });
+  assert.match(p.description, /f0 0 px, f1 2 px, f2 2 px/);
+  assert.match(renderPreview(make(), { diff: true }).description, /single frame/);
+});
+
 test("formatGrid adds rulers", () => {
   const g = formatGrid(["0123456789ab"], 12);
   assert.equal(g.split("\n")[0].trim(), "0         1");
