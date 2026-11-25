@@ -49,7 +49,7 @@ async function call(name: string, args: Record<string, unknown>, expectError = f
   return text;
 }
 
-const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported", "smoke/anim", "smoke/button"];
+const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported", "smoke/anim", "smoke/button", "smoke/grass"];
 // Leftovers from an interrupted run (errors ignored).
 for (const n of SCRATCH) await client.callTool({ name: "manage_asset", arguments: { action: "delete", name: n } });
 
@@ -227,6 +227,40 @@ assert.match(sf, /Animations: idle \(2 frames, 4\.55 fps\)/);
 const tres = await readFile(path.join(godotDir, "sprites", "slime_frames@4x.tres"), "utf8");
 assert.match(tres, /path="res:\/\/sprites\/slime_sheet@4x\.png"/);
 assert.match(tres, /"duration": 1\.45455/);
+// Terrain: a blob autotile template (8 px tiles) → 47 tiles on a test map → Godot TileSet with collision.
+const created = await call("create_asset", { name: "smoke/grass", tileset: { tile: 8, terrain: "grass" }, overwrite: true });
+assert.match(created, /"smoke\/grass" 56×24 .*blob tileset, 8 px tiles/);
+await call("draw", {
+  name: "smoke/grass",
+  ops: [
+    // Island (cols 0–2) with an outline; solid ground (cols 3–5) around the hole (4,1), outlined inside; one variant.
+    { op: "rect", x: 0, y: 0, w: 48, h: 24, color: "m", fill: true },
+    { op: "rect", x: 0, y: 0, w: 24, h: 24, color: "p" },
+    { op: "clear", region: { x: 32, y: 8, w: 8, h: 8 } },
+    { op: "rect", x: 31, y: 7, w: 10, h: 10, color: "p" },
+    { op: "rect", x: 48, y: 0, w: 8, h: 8, color: "l", fill: true },
+  ],
+});
+assert.match(await call("get_asset", { name: "smoke/grass", rulers: false }), /Tileset: blob tileset, 8 px tiles, terrain "grass"/);
+assert.match(await call("render_preview", { name: "smoke/grass" }), /Orange lines = 8 px tile boundaries/);
+assert.match(await call("render_preview", { name: "smoke/grass", tilemap: true }), /47 of the 47 tiles appear/);
+assert.match(await call("render_preview", { name: "smoke/grass", tilemap: ["###", "#.#", "###"] }), /3×3 cells of 8 px/);
+assert.match(await call("audit", { name: "smoke/grass" }), /Blob tileset: 47 tiles \(13 drawn, 34 composed\) \+ 1 center variant/);
+const tiled = await call("export", {
+  name: "smoke/grass",
+  format: "godot-tileset",
+  scale: 2,
+  collision: true,
+  outDir: path.join(godotDir, "tiles"),
+});
+assert.match(tiled, /TileSet with 48 tiles \(47 autotiles \+ 1 center variant\(s\)\), terrain "grass"/);
+const tset = await readFile(path.join(godotDir, "tiles", "smoke", "grass_tileset@2x.tres"), "utf8");
+assert.match(tset, /path="res:\/\/tiles\/smoke\/grass_tiles@2x\.png"/);
+assert.match(tset, /physics_layer_0\/collision_layer = 1/);
+await call("render_preview", { name: "slime", tilemap: true }, true);
+assert.match(await call("manage_asset", { action: "tileset", name: "smoke/grass", tileset: null }), /no longer a tileset/);
+await call("manage_asset", { action: "tileset", name: "smoke/grass", tileset: { tile: 16 } }, true);
+
 await call("list_assets", {});
 for (const n of SCRATCH) await call("manage_asset", { action: "delete", name: n });
 

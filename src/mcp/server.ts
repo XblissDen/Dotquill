@@ -22,9 +22,10 @@ import { encodeRows, formatGrid, indexToChar, MAX_COLORS } from "../core/grid.ts
 import { GUIDE, GUIDE_TOPICS } from "../core/guide.ts";
 import { imageToDoc } from "../core/importer.ts";
 import { DEFAULT_PRESET, PRESETS, resolvePalette, type PaletteSpec } from "../core/palettes.ts";
-import { renderPreview } from "../core/render.ts";
+import { renderPreview, renderTilemapPreview } from "../core/render.ts";
 import { describeSlice, sliceFromMargins, validateSlice, validateSliceName, type Slice } from "../core/slices.ts";
 import { validateName, Workspace } from "../core/store.ts";
+import { blobCanvasSize, BLOB_TEMPLATE_TEXT, blobTiles, describeTileset, gridTiles, validateTileset } from "../core/tileset.ts";
 import { VERSION } from "../core/version.ts";
 import { openBrowser, startViewer } from "../viewer/server.ts";
 
@@ -95,9 +96,10 @@ function summary(name: string, doc: PixelDoc): string {
   const layers = doc.layers.map((l) => (l.visible ? l.name : `${l.name} (hidden)`)).join(", ");
   const tags = doc.tags.length ? ` · tags: ${doc.tags.map((t) => `${t.name} ${t.from}–${t.to}`).join(", ")}` : "";
   const slices = doc.slices.length ? ` · slices: ${doc.slices.map((s) => (s.center ? `${s.name} (9-slice)` : s.name)).join(", ")}` : "";
+  const tiles = doc.tileset ? ` · ${doc.tileset.layout} tileset, ${doc.tileset.tile} px tiles` : "";
   return (
     `"${name}" ${doc.width}×${doc.height} · ${doc.frames.length} frame${doc.frames.length > 1 ? "s" : ""}` +
-    ` · layers (bottom→top): ${layers} · palette ${doc.paletteName ?? "custom"} (${doc.palette.length} colors)${tags}${slices}`
+    ` · layers (bottom→top): ${layers} · palette ${doc.paletteName ?? "custom"} (${doc.palette.length} colors)${tags}${slices}${tiles}`
   );
 }
 
@@ -140,6 +142,15 @@ const zPalette = z
     fromAsset: z.string().optional().describe("Copy another asset's palette."),
   })
   .describe(`Palette source: give exactly one field. Default: ${DEFAULT_PRESET}.`);
+
+const zTileset = z.object({
+  tile: z.number().int().min(4).max(128).describe("Square tile size in px, e.g. 16."),
+  layout: z
+    .enum(["blob", "grid"])
+    .optional()
+    .describe('"blob" (default): a 7×3-tile autotile template that becomes the 47 terrain tiles; "grid": independent tiles (props, decorations).'),
+  terrain: z.string().optional().describe('Terrain name for engines, e.g. "grass" (blob; default: the asset name).'),
+});
 
 const zOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("pixel"), points: z.array(zPoint).min(1), color: zColor, onlyOn: zOnlyOn }),
@@ -290,12 +301,13 @@ server.registerTool(
   {
     title: "Create asset",
     description:
-      "Creates a new sprite/tile/icon canvas. Returns the palette legend (character → color) used for writing pixels. Optionally fills frame 0 of the bottom layer from rows.",
+      "Creates a new sprite/tile/icon canvas. Returns the palette legend (character → color) used for writing pixels. Optionally fills frame 0 of the bottom layer from rows. For terrain tiles pass tileset {tile: 16}: a blob autotile template (size set automatically; read guide topic tiles).",
     inputSchema: {
       name: zName,
-      width: z.number().int().min(1).max(512),
-      height: z.number().int().min(1).max(512),
+      width: z.number().int().min(1).max(512).optional().describe("Required, except for a blob tileset (7 × tile)."),
+      height: z.number().int().min(1).max(512).optional().describe("Required, except for a blob tileset (3 × tile)."),
       palette: zPalette.optional(),
+      tileset: zTileset.optional().describe("Make the canvas a tileset (see guide topic tiles)."),
       layers: z.array(z.string()).optional().describe('Layer names bottom→top. Default ["main"].'),
       frames: z.number().int().min(1).max(MAX_FRAMES).optional(),
       frameDuration: z.number().int().optional().describe("ms per frame (default 100)."),
@@ -311,10 +323,19 @@ server.registerTool(
         if (!a.overwrite && (await ws.exists(name))) {
           throw new Error(`Asset "${name}" already exists. Pass overwrite:true or choose another name.`);
         }
+        let width = a.width;
+        let height = a.height;
+        if (a.tileset && (a.tileset.layout ?? "blob") === "blob") {
+          const need = blobCanvasSize(a.tileset.tile);
+          width ??= need.width;
+          height ??= need.height;
+        }
+        if (width === undefined || height === undefined) throw new Error("width and height are required (a blob tileset sets them from tileset.tile).");
         const pal = await resolvePalette(a.palette, loadPalette);
         const doc = PixelDoc.create({
-          width: a.width,
-          height: a.height,
+          width,
+          height,
+          ...(a.tileset ? { tileset: { ...a.tileset, layout: a.tileset.layout ?? "blob" } } : {}),
           palette: pal.colors,
           ...(pal.name ? { paletteName: pal.name } : {}),
           ...(a.layers ? { layers: a.layers } : {}),
@@ -334,6 +355,7 @@ server.registerTool(
           [
             `Created ${summary(name, doc)}`,
             ...extra,
+            doc.tileset?.layout === "blob" ? `${BLOB_TEMPLATE_TEXT} Workflow and tips: guide topic tiles.` : "",
             "Palette legend (char=color, L=lightness 0-100):",
             legend(doc),
             url ? `Viewer: ${url}#${encodeURIComponent(name)}` : "",
@@ -370,6 +392,10 @@ server.registerTool(
       if (doc.notes) out.push(`Notes: ${doc.notes}`);
       out.push("Palette legend:", legend(doc));
       if (doc.slices.length) out.push("Slices:", ...doc.slices.map((s) => `  ${describeSlice(s)}`));
+      if (doc.tileset) {
+        out.push(`Tileset: ${describeTileset(doc.tileset, doc.width, doc.height)}.`);
+        if (doc.tileset.layout === "blob") out.push(BLOB_TEMPLATE_TEXT);
+      }
       for (const f of frames) {
         const rows = encodeRows(doc.composite(f, layer ? { layer } : {}), doc.width, doc.height);
         out.push(
@@ -455,7 +481,7 @@ server.registerTool(
   {
     title: "Render preview",
     description:
-      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, 9-slice guides, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles, diff:true to check animation, stretch:[w,h] to check UI resizing.",
+      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, 9-slice guides, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles, tilemap:true to see a blob tileset autotiled on a test map, diff:true to check animation, stretch:[w,h] to check UI resizing.",
     inputSchema: {
       name: zName,
       frames: z.array(zInt).optional().describe("Frames to show (default all, max 16)."),
@@ -474,6 +500,10 @@ server.registerTool(
         .optional()
         .describe("[w, h]: show the frames resized through the 9-slice to this size, e.g. [96, 40]. Checks that a panel or button resizes cleanly."),
       slice: z.string().optional().describe("Slice for stretch (default: the first 9-slice)."),
+      tilemap: z
+        .union([z.boolean(), z.array(z.string()).min(1)])
+        .optional()
+        .describe('Blob tilesets: true paints a test map that uses all 47 generated tiles; or pass your own map rows ("#" terrain, "." empty). Shows seams the template hides. Uses the first of frames.'),
     },
     annotations: { readOnlyHint: true },
   },
@@ -481,6 +511,15 @@ server.registerTool(
     run(async () => {
       const name = validateName(a.name);
       const doc = await ws.load(name);
+      if (a.tilemap) {
+        const t = renderTilemapPreview(doc, {
+          ...(Array.isArray(a.tilemap) ? { map: a.tilemap } : {}),
+          ...(a.frames?.length ? { frame: a.frames[0] } : {}),
+          ...(a.zoom ? { zoom: a.zoom } : {}),
+          ...(a.background ? { background: a.background } : {}),
+        });
+        return ok(`${summary(name, doc)}\n${t.description}`, [imageContent(t.png)]);
+      }
       const p = renderPreview(doc, {
         ...(a.frames ? { frames: a.frames } : {}),
         ...(a.zoom ? { zoom: a.zoom } : {}),
@@ -822,13 +861,14 @@ server.registerTool(
   {
     title: "Export",
     description:
-      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
+      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D), "godot-tileset" (tileset assets: tile atlas PNG + a TileSet .tres; blob tilesets come with a terrain set, so Godot autotiles them). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
     inputSchema: {
       name: zName,
-      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes"]),
+      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes", "godot-tileset"]),
       slice: z.string().optional().describe("godot-stylebox: which 9-slice (default: the first)."),
       scale: z.number().int().min(1).max(32).optional().describe("Integer upscale (default 1)."),
-      frame: zInt.optional().describe('For "png" (default 0).'),
+      frame: zInt.optional().describe('For "png" and "godot-tileset" (default 0).'),
+      collision: z.boolean().optional().describe("godot-tileset: full-tile collision on physics layer 0 (platformer ground and walls)."),
       tag: z.string().optional().describe("Only this tag's frames."),
       columns: z.number().int().min(1).optional().describe("Sheet columns."),
       padding: z.number().int().min(0).max(64).optional().describe("Sheet spacing in px."),
@@ -851,6 +891,7 @@ server.registerTool(
         ...(a.padding !== undefined ? { padding: a.padding } : {}),
         ...(a.slice !== undefined ? { slice: a.slice } : {}),
         ...(resDir ? { resDir } : {}),
+        ...(a.collision ? { collision: true } : {}),
       });
       const paths = await writeExport(files, outDir);
       const lines = [`Exported "${name}" (${a.format}) to ${outDir}:`, ...paths.map((p, i) => `- ${p} (${files[i].data.length} bytes)`)];
@@ -863,13 +904,29 @@ server.registerTool(
             ? `Animations: ${godotAnimations(doc, a.tag)
                 .map((an) => `${an.name} (${an.frames.length} frames, ${Math.round(an.speed * 100) / 100} fps)`)
                 .join(", ")}. Assign the .tres to AnimatedSprite2D → Sprite Frames, then play("<name>").`
-            : "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme.",
+            : a.format === "godot-tileset"
+              ? tilesetHint(doc, name, a.frame ?? 0, !!a.collision)
+              : "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme.",
           "For crisp pixels set Project Settings → Rendering → Textures → Default Texture Filter = Nearest.",
         );
       }
       return ok(lines.join("\n"));
     }),
 );
+
+function tilesetHint(doc: PixelDoc, name: string, frame: number, collision: boolean): string {
+  const t = doc.tileset!;
+  const phys = collision ? ", full-tile collision on physics layer 0" : "";
+  if (t.layout === "grid") {
+    return `TileSet with ${gridTiles(doc, frame).length} tiles${phys}. In Godot: add a TileMapLayer, set Tile Set to the .tres and paint tiles from the atlas.`;
+  }
+  const n = blobTiles(doc, frame).length;
+  const terrain = t.terrain ?? name.split("/").pop()!;
+  return (
+    `TileSet with ${n} tiles (47 autotiles${n > 47 ? ` + ${n - 47} center variant(s)` : ""}), terrain "${terrain}" in mode Match Corners and Sides${phys}. ` +
+    `In Godot: add a TileMapLayer, set Tile Set to the .tres, open the TileMap panel → Terrains, pick "${terrain}" and paint; Godot picks the right tile for each cell.`
+  );
+}
 
 server.registerTool(
   "import_png",
@@ -913,12 +970,13 @@ server.registerTool(
   {
     title: "Manage asset",
     description:
-      'duplicate (to a new name, e.g. for variants), rename, delete (moved to .dotquill/trash), undo (restore the previous saved version; repeatable), or notes (replace the intent/style notes; keep them in sync with the art).',
+      'duplicate (to a new name, e.g. for variants), rename, delete (moved to .dotquill/trash), undo (restore the previous saved version; repeatable), notes (replace the intent/style notes; keep them in sync with the art), or tileset (mark the canvas as a tileset {tile, layout, terrain}; null removes it).',
     inputSchema: {
-      action: z.enum(["duplicate", "rename", "delete", "undo", "notes"]),
+      action: z.enum(["duplicate", "rename", "delete", "undo", "notes", "tileset"]),
       name: zName,
       to: zName.optional().describe("New name for duplicate/rename."),
       notes: z.string().max(2000).optional().describe('For notes: the new text ("" clears).'),
+      tileset: zTileset.nullable().optional().describe("For tileset: the settings, or null to make it a plain canvas again."),
     },
   },
   async (a) =>
@@ -931,6 +989,14 @@ server.registerTool(
             d.notes = a.notes!.trim();
           });
           return ok(a.notes.trim() ? `Notes of "${name}" updated.` : `Notes of "${name}" cleared.`);
+        }
+        case "tileset": {
+          if (a.tileset === undefined) throw new Error('tileset needs "tileset" ({ tile, layout, terrain }, or null to remove).');
+          const spec = a.tileset;
+          const { doc } = await edit(name, (d) => {
+            d.tileset = spec ? validateTileset({ ...spec, layout: spec.layout ?? "blob" }, d.width, d.height) : undefined;
+          });
+          return ok(doc.tileset ? `"${name}" is now a ${describeTileset(doc.tileset, doc.width, doc.height)}.` : `"${name}" is no longer a tileset.`);
         }
         case "duplicate":
         case "rename": {

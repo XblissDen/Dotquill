@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { indexedToPNG } from "../core/bitmap.ts";
 import { buildExport, EXPORT_FORMATS, findGodotResDir, writeExport, type ExportFormat } from "../core/export.ts";
 import { EXT, META_DIR, validateName, type Workspace } from "../core/store.ts";
+import { renderTilemap, SAMPLE_MAP } from "../core/tileset.ts";
 import { VERSION } from "../core/version.ts";
 
 const WEB_DIR = fileURLToPath(new URL("../../web/", import.meta.url));
@@ -143,6 +144,15 @@ function createServer(ws: Workspace, port: number): { server: http.Server; stop:
         const png = indexedToPNG(doc.composite(0), doc.width, doc.height, doc.palette);
         res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-cache" });
         res.end(png);
+        return;
+      }
+      if (p === "/api/tilemap") {
+        // A blob tileset painted on the test map, at 1×.
+        const doc = await ws.load(validateName(url.searchParams.get("name") ?? ""));
+        const f = Number(url.searchParams.get("frame") ?? 0);
+        const tm = renderTilemap(doc, SAMPLE_MAP, Number.isInteger(f) && f >= 0 && f < doc.frames.length ? f : 0);
+        res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+        res.end(indexedToPNG(tm.pixels, tm.width, tm.height, doc.palette));
         return;
       }
       if (p === "/api/events") {

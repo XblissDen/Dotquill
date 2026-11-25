@@ -20,6 +20,7 @@ const state = {
   timer: 0,
   hidden: new Set(),
   hot: -1,
+  map: null, // { key, img } test map of a blob tileset
 };
 
 // ---------- utils ----------
@@ -110,30 +111,33 @@ function reps() {
   return $("tile").checked ? 3 : 1;
 }
 
-function fitZoom() {
-  const d = state.doc;
+function isBlob() {
+  return state.doc?.tileset?.layout === "blob";
+}
+
+function mapMode() {
+  return isBlob() && $("map").checked;
+}
+
+/** The blob tileset painted on the server's test map; reloaded when the asset or frame changes. */
+function mapImage() {
+  const key = `${state.name}|${state.frame}|${state.doc.updated}`;
+  if (state.map?.key === key) return state.map.img.complete && state.map.img.naturalWidth ? state.map.img : null;
+  const img = new Image();
+  img.onload = () => state.map?.img === img && render();
+  img.onerror = () => toast("Could not render the test map", "error");
+  img.src = `/api/tilemap?name=${encodeURIComponent(state.name)}&frame=${state.frame}&v=${encodeURIComponent(state.doc.updated)}`;
+  state.map = { key, img };
+  return null;
+}
+
+function fitZoom(w, h) {
   const wrap = $("canvasWrap");
-  const avail = Math.min((wrap.clientWidth - 56) / (d.width * reps()), (wrap.clientHeight - 56) / (d.height * reps()));
+  const avail = Math.min((wrap.clientWidth - 56) / w, (wrap.clientHeight - 56) / h);
   return Math.max(1, Math.min(48, Math.floor(avail)));
 }
 
-function render() {
-  const d = state.doc;
-  $("empty").hidden = !!d;
-  canvas.hidden = !d;
-  if (!d || state.bitmaps.length !== d.frames.length) return;
-  if (state.fit) state.zoom = fitZoom();
-  const z = state.zoom;
-  const R = reps();
-  const W = d.width;
-  const H = d.height;
-  const cw = W * R * z;
-  const ch = H * R * z;
-  if (canvas.width !== cw || canvas.height !== ch) {
-    canvas.width = cw;
-    canvas.height = ch;
-  }
-  ctx.imageSmoothingEnabled = false;
+function paintBackground(cw, ch, z) {
   const bg = $("bg").value;
   if (bg === "checker") {
     const s = Math.max(4, Math.min(16, Math.floor(z / 2) || 4));
@@ -145,6 +149,48 @@ function render() {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, cw, ch);
   }
+}
+
+function sizeCanvas(cw, ch) {
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
+  }
+  ctx.imageSmoothingEnabled = false;
+}
+
+function renderMap() {
+  const img = mapImage();
+  if (!img) return;
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (state.fit) state.zoom = fitZoom(w, h);
+  const z = state.zoom;
+  sizeCanvas(w * z, h * z);
+  paintBackground(w * z, h * z, z);
+  ctx.drawImage(img, 0, 0, w * z, h * z);
+}
+
+function render() {
+  const d = state.doc;
+  $("empty").hidden = !!d;
+  canvas.hidden = !d;
+  if (!d || state.bitmaps.length !== d.frames.length) return;
+  for (const b of $("frames").children) b.classList.toggle("active", Number(b.dataset.f) === state.frame);
+  if (mapMode()) {
+    renderMap();
+    $("zoomLabel").textContent = `${state.zoom}×`;
+    return;
+  }
+  const R = reps();
+  const W = d.width;
+  const H = d.height;
+  if (state.fit) state.zoom = fitZoom(W * R, H * R);
+  const z = state.zoom;
+  const cw = W * R * z;
+  const ch = H * R * z;
+  sizeCanvas(cw, ch);
+  paintBackground(cw, ch, z);
   const n = d.frames.length;
   const drawFrame = (f) => {
     for (let ry = 0; ry < R; ry++) for (let rx = 0; rx < R; rx++) ctx.drawImage(state.bitmaps[f], rx * W * z, ry * H * z, W * z, H * z);
@@ -184,6 +230,22 @@ function render() {
       ctx.stroke();
     }
   }
+  const T = d.tileset?.tile;
+  if (T && R === 1 && $("grid").checked) {
+    // Tile boundaries of a tileset.
+    ctx.strokeStyle = "rgba(255,138,76,0.85)";
+    ctx.lineWidth = Math.max(1, Math.floor(z / 6));
+    ctx.beginPath();
+    for (let x = T; x < W; x += T) {
+      ctx.moveTo(x * z, 0);
+      ctx.lineTo(x * z, ch);
+    }
+    for (let y = T; y < H; y += T) {
+      ctx.moveTo(0, y * z);
+      ctx.lineTo(cw, y * z);
+    }
+    ctx.stroke();
+  }
   if (R === 3) {
     ctx.strokeStyle = "rgba(255,138,76,0.7)";
     ctx.lineWidth = 1;
@@ -212,7 +274,6 @@ function render() {
     ctx.restore();
   }
   $("zoomLabel").textContent = `${z}×`;
-  for (const b of $("frames").children) b.classList.toggle("active", Number(b.dataset.f) === state.frame);
 }
 
 // ---------- panels ----------
@@ -270,6 +331,9 @@ function buildTimeline() {
   $("slicesToggle").hidden = !hasNine;
   $("expGodot").disabled = !hasNine;
   if (!hasNine && $("expFormat").value === "godot-stylebox") $("expFormat").value = "sheet";
+  $("mapToggle").hidden = !isBlob();
+  $("expTileset").disabled = !d.tileset;
+  if (!d.tileset && $("expFormat").value === "godot-tileset") $("expFormat").value = "sheet";
 }
 
 function renderInspector() {
@@ -292,6 +356,15 @@ function renderInspector() {
       c
         ? `${s.name}: 9-slice, borders L${c.x} T${c.y} R${b.w - c.x - c.w} B${b.h - c.y - c.h}, ${s.mode || "stretch"}`
         : `${s.name}: ${b.w}×${b.h} at ${b.x},${b.y}`,
+    ]);
+  }
+  if (d.tileset) {
+    const t = d.tileset;
+    rows.push([
+      "Tileset",
+      t.layout === "blob"
+        ? `blob autotiles, ${t.tile} px${t.terrain ? `, terrain ${t.terrain}` : ""} (47 tiles; Map shows them)`
+        : `grid, ${t.tile} px tiles`,
     ]);
   }
   if (d.notes) rows.push(["Notes", d.notes]);
@@ -498,6 +571,10 @@ $("zoomLabel").onclick = () => {
   render();
 };
 for (const id of ["grid", "onion", "bg", "tile", "slices"]) $(id).onchange = render;
+$("map").onchange = () => {
+  state.fit = true;
+  render();
+};
 window.addEventListener("hashchange", () => {
   const name = decodeURIComponent(location.hash.slice(1));
   if (name && name !== state.name) select(name);
@@ -516,6 +593,13 @@ canvas.addEventListener("mousemove", (e) => {
   const d = state.doc;
   if (!d) return;
   const rect = canvas.getBoundingClientRect();
+  if (mapMode()) {
+    const T = d.tileset.tile;
+    const mx = Math.floor((e.clientX - rect.left) / state.zoom);
+    const my = Math.floor((e.clientY - rect.top) / state.zoom);
+    $("hover").replaceChildren(`test map  x ${mx}  y ${my}  cell ${Math.floor(mx / T)},${Math.floor(my / T)}`);
+    return;
+  }
   const x = Math.floor(((e.clientX - rect.left) / rect.width) * d.width * reps()) % d.width;
   const y = Math.floor(((e.clientY - rect.top) / rect.height) * d.height * reps()) % d.height;
   const v = state.frames[state.frame][y * d.width + x];
@@ -579,6 +663,9 @@ window.addEventListener("keydown", (e) => {
       break;
     case "s":
       toggle("slices");
+      break;
+    case "m":
+      if (isBlob()) toggle("map");
       break;
     default:
       return;

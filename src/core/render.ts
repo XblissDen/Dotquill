@@ -1,7 +1,8 @@
 import { Bitmap, paletteRGB, type RGBA } from "./bitmap.ts";
 import { parseHex } from "./color.ts";
-import type { PixelDoc } from "./doc.ts";
+import { PixelDoc } from "./doc.ts";
 import { nineSlice } from "./slices.ts";
+import { BLOB_TEMPLATE_TEXT, renderTilemap, SAMPLE_MAP } from "./tileset.ts";
 
 export interface PreviewOptions {
   frames?: number[];
@@ -99,6 +100,7 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
   const diff = !!opts.diff && total > 1 && !stretchSlice;
   const changed: number[] = [];
   const guides = !stretchSlice && !tile && zoom >= 4 ? doc.slices.filter((s) => s.center) : [];
+  const tileLines = !stretchSlice && !tile && doc.tileset ? doc.tileset.tile : 0;
 
   composites.forEach((comp, k) => {
     const px = x0 + k * (pw + gap);
@@ -113,6 +115,10 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
       for (let j = 1; j < ch; j++) bmp.fillRect(px, y0 + j * zoom, pw, 1, j % 8 === 0 ? GRID_MAJOR : GRID_MINOR);
     }
     if (tile) bmp.strokeRect(px + W * zoom, y0 + H * zoom, W * zoom, H * zoom, TILE_MARK);
+    if (tileLines) {
+      for (let x = tileLines; x < W; x += tileLines) bmp.fillRect(px + x * zoom - 1, y0, 2, ph, TILE_MARK);
+      for (let y = tileLines; y < H; y += tileLines) bmp.fillRect(px, y0 + y * zoom - 1, pw, 2, TILE_MARK);
+    }
     if (diff) {
       const prev = doc.composite((frames[k] - 1 + total) % total, layer ? { layer } : {});
       const ox = px + (tile ? W * zoom : 0);
@@ -177,6 +183,8 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
     guides.length
       ? `Yellow dashed lines = 9-slice guides (${guides.map((s) => s.name).join(", ")}): outside them corners and edges keep their size, inside is the stretchable center.`
       : "",
+    tileLines ? `Orange lines = ${tileLines} px tile boundaries.` : "",
+    tileLines && doc.tileset?.layout === "blob" ? BLOB_TEMPLATE_TEXT : "",
     rulers ? `Top numbers = x, left numbers = y${step > 1 ? ` (every ${step} px)` : ""}.` : "",
     grid ? "Thin grid line per pixel, blue line every 8 px." : "",
     solid ? `Background ${opts.background}.` : "Checkerboard = transparent.",
@@ -197,4 +205,47 @@ export function renderPreview(doc: PixelDoc, opts: PreviewOptions = {}): Preview
     .join(" ");
 
   return { png: bmp.toPNG(), description, zoom };
+}
+
+const MAX_MAP_PX = 1600;
+
+/** A blob tileset painted onto a test map (or the given "#"/"." rows), as engine autotiling would. */
+export function renderTilemapPreview(
+  doc: PixelDoc,
+  opts: { map?: readonly string[]; frame?: number; zoom?: number; background?: string } = {},
+): Preview {
+  const frame = doc.checkFrame(opts.frame ?? 0);
+  const rows = opts.map?.length ? opts.map : SAMPLE_MAP;
+  const tm = renderTilemap(doc, rows, frame);
+  if (tm.width > MAX_MAP_PX || tm.height > MAX_MAP_PX) {
+    throw new Error(`The map is ${tm.width}×${tm.height} px; previews allow up to ${MAX_MAP_PX} px per side. Use fewer cells.`);
+  }
+  const mapDoc = new PixelDoc({
+    width: tm.width,
+    height: tm.height,
+    palette: doc.palette,
+    paletteName: doc.paletteName,
+    layers: [{ name: "map", visible: true }],
+    frames: [{ duration: 100, cels: new Map([["map", tm.pixels]]) }],
+    tags: [],
+    slices: [],
+    notes: "",
+    created: doc.created,
+    updated: doc.updated,
+  });
+  const p = renderPreview(mapDoc, {
+    grid: false,
+    ...(opts.zoom ? { zoom: opts.zoom } : {}),
+    ...(opts.background ? { background: opts.background } : {}),
+  });
+  const T = doc.tileset!.tile;
+  const description = [
+    `Tilemap preview of frame ${frame}: ${tm.cols}×${tm.rows} cells of ${T} px painted with the generated blob tiles, as engine autotiling would ` +
+      `(cell = pixel ÷ ${T}). ${tm.drawn} cells use drawn template tiles, ${tm.composed} composed tiles, ${tm.variants} center variants; ` +
+      `${tm.distinct} of the 47 tiles appear.`,
+    "Look for seams at tile borders, broken or doubled outlines, gaps at inner corners, edge art cut at the tile's half line, and obvious repetition.",
+    p.description.replace(/^Frame 0 /, "Map "),
+    `Map ("#" = terrain):\n${rows.join("\n")}`,
+  ].join(" ");
+  return { png: p.png, description, zoom: p.zoom };
 }

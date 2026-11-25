@@ -4,10 +4,21 @@ import gifenc from "gifenc";
 import { Bitmap, paletteRGB } from "./bitmap.ts";
 import type { PixelDoc } from "./doc.ts";
 import { marginsOf, type Rect } from "./slices.ts";
+import { blobTiles, E, gridTiles, N, NE, NW, S, SE, SW, VARIANT_PROBABILITY, W as WEST } from "./tileset.ts";
 import { VERSION } from "./version.ts";
 
-export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox" | "godot-spriteframes";
-export const EXPORT_FORMATS: readonly ExportFormat[] = ["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes"];
+export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox" | "godot-spriteframes" | "godot-tileset";
+export const EXPORT_FORMATS: readonly ExportFormat[] = [
+  "png",
+  "frames",
+  "sheet",
+  "gif",
+  "godot-stylebox",
+  "godot-spriteframes",
+  "godot-tileset",
+];
+/** Columns of the generated blob atlas. */
+export const BLOB_ATLAS_COLUMNS = 8;
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -24,8 +35,31 @@ export interface ExportOptions {
   layer?: string;
   /** godot-stylebox: which 9-slice (default: the first one). */
   slice?: string;
-  /** godot-stylebox: res:// folder the files land in (e.g. "res://ui/"); otherwise texture paths are relative. */
+  /** godot-*: res:// folder the files land in (e.g. "res://ui/"); otherwise texture paths are relative. */
   resDir?: string;
+  /** godot-tileset: full-tile collision squares on physics layer 0. */
+  collision?: boolean;
+}
+
+// Godot's square-tile peering bits, in the order Godot writes them.
+const PEERING_BITS: readonly [number, string][] = [
+  [E, "right_side"],
+  [SE, "bottom_right_corner"],
+  [S, "bottom_side"],
+  [SW, "bottom_left_corner"],
+  [WEST, "left_side"],
+  [NW, "top_left_corner"],
+  [N, "top_side"],
+  [NE, "top_right_corner"],
+];
+
+/** Most used color of a tile, as a Godot Color (terrain swatch in the editor). */
+function dominantColor(px: Int16Array, palette: readonly string[]): string {
+  const counts = new Map<number, number>();
+  for (const v of px) if (v >= 0) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const best = [...counts].sort((a, b) => b[1] - a[1])[0];
+  const [r, g, b] = best ? paletteRGB([palette[best[0]]])[0] : [128, 128, 128];
+  return `Color(${[r, g, b].map((c) => gdFloat(Math.round((c / 255) * 1000) / 1000)).join(", ")}, 1)`;
 }
 
 /** Finds the Godot project containing dir and returns dir as a res:// folder ("res://ui/"), or null. */
@@ -283,6 +317,75 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
       return [
         { path: `${folder}${png}`, data: sheet.toPNG(), mime: "image/png" },
         { path: `${folder}${base}_frames${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
+      ];
+    }
+    case "godot-tileset": {
+      // Tile atlas PNG + TileSet .tres. Blob tilesets get a terrain set with peering bits, so Godot autotiles them.
+      const ts = doc.tileset;
+      if (!ts) throw new Error("This asset is not a tileset. Create one with create_asset tileset, or set it with manage_asset action tileset.");
+      const f = doc.checkFrame(o.frame ?? 0);
+      const T = ts.tile;
+      const TS = T * scale;
+      const base = name.split("/").pop()!;
+      const folder = name.includes("/") ? name.slice(0, name.lastIndexOf("/") + 1) : "";
+      const png = `${base}_tiles${suffix}.png`;
+      const texPath = o.resDir ? `${o.resDir}${folder}${png}` : png;
+      type Placed = { col: number; row: number; pixels: Int16Array; mask?: number; probability?: number };
+      let placed: Placed[];
+      let cols: number;
+      let rows: number;
+      let center: Int16Array | null = null;
+      if (ts.layout === "blob") {
+        const tiles = blobTiles(doc, f);
+        cols = BLOB_ATLAS_COLUMNS;
+        rows = Math.ceil(tiles.length / cols);
+        placed = tiles.map((t, k) => ({
+          col: k % cols,
+          row: Math.floor(k / cols),
+          pixels: t.pixels,
+          mask: t.mask,
+          ...(t.variant ? { probability: VARIANT_PROBABILITY } : {}),
+        }));
+        center = tiles.find((t) => t.mask === 255 && !t.variant)!.pixels;
+      } else {
+        cols = doc.width / T;
+        rows = doc.height / T;
+        placed = gridTiles(doc, f);
+      }
+      if (!placed.length) throw new Error("The tileset has no tiles yet (every cell is empty).");
+      const atlas = new Bitmap(cols * TS, rows * TS);
+      for (const t of placed) atlas.drawIndexed(t.pixels, T, T, pal, t.col * TS, t.row * TS, scale);
+      const h = TS / 2;
+      const out = [
+        '[gd_resource type="TileSet" load_steps=3 format=3]',
+        "",
+        `[ext_resource type="Texture2D" path="${texPath}" id="1_tex"]`,
+        "",
+        '[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_1"]',
+        'texture = ExtResource("1_tex")',
+        `texture_region_size = Vector2i(${TS}, ${TS})`,
+      ];
+      for (const t of placed) {
+        const id = `${t.col}:${t.row}/0`;
+        out.push(`${id} = 0`);
+        if (t.mask !== undefined) out.push(`${id}/terrain_set = 0`, `${id}/terrain = 0`);
+        if (t.probability !== undefined) out.push(`${id}/probability = ${gdFloat(t.probability)}`);
+        if (o.collision) out.push(`${id}/physics_layer_0/polygon_0/points = PackedVector2Array(${-h}, ${-h}, ${h}, ${-h}, ${h}, ${h}, ${-h}, ${h})`);
+        if (t.mask !== undefined) for (const [bit, key] of PEERING_BITS) if (t.mask & bit) out.push(`${id}/terrains_peering_bit/${key} = 0`);
+      }
+      out.push("", "[resource]", `tile_size = Vector2i(${TS}, ${TS})`);
+      if (o.collision) out.push("physics_layer_0/collision_layer = 1");
+      if (center) {
+        out.push(
+          "terrain_set_0/mode = 0",
+          `terrain_set_0/terrain_0/name = "${gdString(ts.terrain ?? base)}"`,
+          `terrain_set_0/terrain_0/color = ${dominantColor(center, doc.palette)}`,
+        );
+      }
+      out.push('sources/0 = SubResource("TileSetAtlasSource_1")', "");
+      return [
+        { path: `${folder}${png}`, data: atlas.toPNG(), mime: "image/png" },
+        { path: `${folder}${base}_tileset${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
       ];
     }
     case "gif": {

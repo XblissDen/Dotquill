@@ -1,6 +1,7 @@
 import { lightness } from "./color.ts";
 import type { PixelDoc } from "./doc.ts";
 import { indexToChar } from "./grid.ts";
+import { auditTileset } from "./tileset.ts";
 
 const CAP = 12;
 
@@ -125,7 +126,12 @@ export function audit(doc: PixelDoc, name: string): string {
         `normal for eyes, specular dots and glints, not listed.`,
     );
   }
-  if (edgeFrames.length) {
+  if (doc.tileset) {
+    // Tiles fill their cells, so edge contact is expected.
+    const t = auditTileset(doc);
+    warn.push(...t.warn);
+    info.push(...t.info);
+  } else if (edgeFrames.length) {
     warn.push(
       `Art touches the canvas edge in ${multi ? `frame(s) ${framesLabel(edgeFrames, total) || "all"}` : "the frame"}: ` +
         `no room for an outline or motion; may look cropped (ignore for seamless tiles).`,

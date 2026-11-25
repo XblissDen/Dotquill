@@ -18,8 +18,9 @@ Claude gets drawing tools over [MCP](https://modelcontextprotocol.io): palette-l
 - **Drawing**: pixel rows, lines, rectangles, ellipses, flood fill, color replace, outlines, mirroring, flip, shift, copy/move regions, dithering, and `onlyOn` masks for shading inside a shape.
 - **Animation**: frames, durations, tags (idle, walk…), playback and onion skin in the viewer.
 - **Layers**: add, reorder, hide, merge.
+- **Terrain tilesets with autotiling**: draw a 7×3-tile template (an island and a ring around a hole), get all 47 "blob" tiles an engine needs; a test-map preview shows seams before you export.
 - **Pixel UI (9-slice)**: panels, buttons and bars with fixed corners and stretching or tiling edges; button states as frames; resize check in the preview.
-- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `SpriteFrames` (one animation per tag) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
+- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `SpriteFrames` (one animation per tag), `TileSet` (terrain autotiling, optional collision) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
 - **Import**: PNG to asset, with palette quantization, sheet slicing and downscaling of upscaled art.
 
 ## Requirements
@@ -52,7 +53,7 @@ Just ask, for example:
 
 - “Draw a 16×16 green slime with a 2-frame idle bounce, sweetie-16 palette.”
 - “Make a 32×32 knight, side view, light from the top-left, dark outline. Then a 4-frame walk cycle.”
-- “Create 4 seamless 16×16 grass tiles for a top-down RPG and check them tiled.”
+- “Make a 16×16 grass tileset with autotiling and export it for Godot into `tiles/`.”
 - “Export the knight as a sprite sheet at 4× into `assets/sprites`.”
 - “Open the viewer.”
 
@@ -64,26 +65,26 @@ Without Claude running:
 npm run viewer -- --dir /path/to/pixel-art --open
 ```
 
-Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `o` onion skin, `t` tile 3×3. Hover a palette swatch to highlight its pixels.
+Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `o` onion skin, `t` tile 3×3, `s` 9-slice guides, `m` test map (tilesets). Hover a palette swatch to highlight its pixels.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `guide` | Pixel-art workflow and techniques (sprites, shading, outlines, animation, tiles, palettes, UI). |
-| `create_asset` | New canvas with a palette, layers and frames; returns the palette legend. |
+| `create_asset` | New canvas with a palette, layers and frames; returns the palette legend. `tileset` makes a blob autotile template or a grid of tiles. |
 | `get_asset` | Pixel rows with x/y rulers, palette legend, frames and tags. |
 | `write_pixels` | Write rows of palette characters at (x, y); `.` transparent, `_` keep. |
 | `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline (with `refresh` to rebuild after moving parts), mirror, flip, shift, clear, copy, dither (+ `onlyOn` masks). One frame, a list of `frames`, or `allFrames`. |
-| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, 9-slice guides, `tile` mode, `diff` mode (marks pixels changed since the previous frame), `stretch` mode (resizes UI through its 9-slice). |
+| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, 9-slice guides, `tile` mode, `diff` mode (marks pixels changed since the previous frame), `stretch` mode (resizes UI through its 9-slice), `tilemap` mode (paints a tileset onto a test map). |
 | `palette` | Presets, switch palette (nearest or index remap), edit or add colors. |
 | `frames` | Add/copy, delete, move frames, durations, tags. |
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
 | `slices` | Named regions; with `nine` margins a 9-slice for UI (`stretch` or `tile`). |
 | `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
-| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
+| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-tileset` (atlas + `TileSet` `.tres` with terrain, optional collision), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
-| `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes. |
+| `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes, set or remove tileset settings. |
 | `open_viewer` | Open the live viewer in the browser. |
 
 ## Godot
@@ -95,6 +96,15 @@ For crisp pixels set **Project Settings → Rendering → Textures → Default T
 ### Animated sprites
 
 `godot-spriteframes` writes `hero_sheet@4x.png` and `hero_frames@4x.tres`, a `SpriteFrames` resource with one animation per tag (idle, walk, …). Per-frame durations are kept: the animation speed is set from the shortest frame, and longer frames get a larger relative duration. Tag directions `reverse` and `pingpong` are unrolled into the frame order. Assign the `.tres` to **AnimatedSprite2D → Sprite Frames** and call `play("idle")`. Without tags you get one `default` animation over all frames.
+
+### Terrain tilesets
+
+Ask for something like “a 16×16 grass tileset with autotiling, export it for Godot into `tiles/`”. Claude creates a blob template (7×3 tiles: a 3×3 island with outer corners, edges and center, solid ground around a one-tile hole for the inner corners, and up to three center variants), draws it, checks the 47 generated tiles on a test map with `render_preview` `tilemap`, and exports with `godot-tileset`:
+
+- `grass_tiles.png` holds the 47 tiles (plus variants), and `grass_tileset.tres` is a `TileSet` with the terrain `grass` already set up (Match Corners and Sides).
+- Add a **TileMapLayer**, set **Tile Set** to the `.tres`, open **TileMap → Terrains**, pick `grass` and paint: Godot picks the right tile for every cell. Center variants are mixed in at random.
+- `collision: true` adds full-tile collision on physics layer 0 for platformer ground and walls.
+- A `grid` tileset (props, decorations) exports every non-empty cell as a plain tile.
 
 ### Pixel UI
 
@@ -130,7 +140,7 @@ npm test            # unit tests (node:test)
 npm run smoke       # drives the real MCP server through an MCP client; writes previews
 ```
 
-Roadmap ideas: Tiled exports, `.aseprite` export, tileset autotiling, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
+Roadmap ideas: Tiled exports, `.aseprite` export, animated tiles, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
 
 ## License
 

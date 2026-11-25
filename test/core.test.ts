@@ -11,9 +11,23 @@ import { buildExport, findGodotResDir, godotAnimations } from "../src/core/expor
 import { encodeRows, formatGrid } from "../src/core/grid.ts";
 import { imageToDoc } from "../src/core/importer.ts";
 import { PRESETS } from "../src/core/palettes.ts";
-import { renderPreview } from "../src/core/render.ts";
+import { renderPreview, renderTilemapPreview } from "../src/core/render.ts";
 import { nineSlice, sliceFromMargins, validateSlice } from "../src/core/slices.ts";
 import { Workspace } from "../src/core/store.ts";
+import {
+  BLOB_MASKS,
+  blobTiles,
+  E,
+  N,
+  NE,
+  normalizeMask,
+  NW,
+  renderTilemap,
+  S,
+  SE,
+  validateTileset,
+  W as WEST,
+} from "../src/core/tileset.ts";
 
 const PAL = PRESETS["sweetie-16"].colors;
 const make = (w = 8, h = 8, extra: Partial<Parameters<typeof PixelDoc.create>[0]> = {}) =>
@@ -285,6 +299,109 @@ test("godot-spriteframes: one animation per tag with relative durations", () => 
   const def = godotAnimations(make(2, 2, { frames: 2 }));
   assert.deepEqual([def[0].name, def[0].frames], ["default", [0, 1]]);
   assert.equal(godotAnimations(doc, "idle").length, 1);
+});
+
+/**
+ * Blob template with 4 px tiles; template cell (col,row) is filled with color col + 7·row.
+ * The hole (4,1) and the variant cells (6,1), (6,2) stay empty, so (6,0) is the only variant.
+ */
+function blobTemplate(): PixelDoc {
+  const T = 4;
+  const doc = make(7 * T, 3 * T, { palette: PRESETS["endesga-32"].colors, tileset: { tile: T, layout: "blob", terrain: "grass" } });
+  const cel = doc.cel(0, "main");
+  for (let y = 0; y < doc.height; y++) {
+    for (let x = 0; x < doc.width; x++) {
+      const c = Math.floor(x / T) + 7 * Math.floor(y / T);
+      if (![11, 13, 20].includes(c)) cel[y * doc.width + x] = c;
+    }
+  }
+  return doc;
+}
+/** Color of each quarter (TL, TR, BL, BR) of a 4 px tile. */
+const quarters = (px: Int16Array) => [px[0], px[2], px[8], px[10]];
+
+test("tileset: 47 blob masks, validation and the file format", () => {
+  assert.equal(BLOB_MASKS.length, 47);
+  assert.equal(normalizeMask(NE | N), N, "a corner without both sides does not count");
+  assert.throws(() => validateTileset({ tile: 5 }, 25, 15), /even size/);
+  assert.throws(() => validateTileset({ tile: 16 }, 80, 48), /112×48/);
+  assert.throws(() => validateTileset({ tile: 16, layout: "grid" }, 40, 32), /whole number/);
+  assert.deepEqual(validateTileset({ tile: 8, layout: "grid", terrain: " rock " }, 32, 16), { tile: 8, layout: "grid", terrain: "rock" });
+  const back = PixelDoc.fromJSON(JSON.parse(JSON.stringify(blobTemplate().toJSON())));
+  assert.deepEqual(back.tileset, { tile: 4, layout: "blob", terrain: "grass" });
+  assert.equal(make(4, 4).toJSON().tileset, undefined);
+});
+
+test("blob tiles: drawn template tiles are kept, the rest are built from the right quarters", () => {
+  const tiles = blobTiles(blobTemplate());
+  assert.equal(tiles.length, 48, "47 tiles + 1 center variant");
+  const get = (mask: number, variant = 0) => tiles.find((t) => t.mask === mask && t.variant === variant)!;
+  assert.deepEqual(quarters(get(E | S | SE).pixels), [0, 0, 0, 0]);
+  assert.equal(get(E | S | SE).source, "drawn");
+  // Isolated cell: the four outer corners.
+  assert.deepEqual(quarters(get(0).pixels), [0, 2, 14, 16]);
+  assert.equal(get(0).source, "composed");
+  // Vertical strip: left and right edges; horizontal strip: top and bottom edges.
+  assert.deepEqual(quarters(get(N | S).pixels), [7, 9, 7, 9]);
+  assert.deepEqual(quarters(get(E | WEST).pixels), [1, 1, 15, 15]);
+  // All sides, only NW and SE diagonals: inner corners at top-right and bottom-left.
+  assert.deepEqual(quarters(get(N | E | S | WEST | NW | SE).pixels), [8, 17, 5, 8]);
+  assert.deepEqual(quarters(get(255, 1).pixels), [6, 6, 6, 6]);
+});
+
+test("tilemap: each cell gets the tile of its neighbors; the sample map uses all 47", () => {
+  const doc = blobTemplate();
+  assert.equal(renderTilemap(doc).distinct, 47);
+  const tm = renderTilemap(doc, ["##", ".#"]);
+  assert.deepEqual([tm.width, tm.height, tm.cols, tm.rows], [8, 8, 2, 2]);
+  const tile = (cx: number, cy: number) =>
+    Int16Array.from({ length: 16 }, (_, i) => tm.pixels[(cy * 4 + Math.floor(i / 4)) * tm.width + cx * 4 + (i % 4)]);
+  assert.deepEqual(quarters(tile(0, 0)), [0, 1, 14, 15], "left end of a strip");
+  assert.deepEqual(quarters(tile(1, 0)), [1, 2, 5, 9], "corner of an L: inner corner toward the empty diagonal");
+  assert.deepEqual(quarters(tile(0, 1)), [-1, -1, -1, -1]);
+  assert.throws(() => renderTilemap(doc, ["#x"]), /use "#" for terrain/);
+  const p = renderTilemapPreview(doc);
+  assert.equal(readPNG(p.png).width > 0, true);
+  assert.match(p.description, /47 of the 47 tiles appear/);
+  assert.match(renderPreview(doc).description, /Orange lines = 4 px tile boundaries\. Blob template/);
+});
+
+test("godot-tileset: terrain peering bits, variants, collision and grid tilesets", () => {
+  const [png, tres] = buildExport(blobTemplate(), "tiles/grass", { format: "godot-tileset", scale: 2, collision: true });
+  assert.equal(png.path, "tiles/grass_tiles@2x.png");
+  assert.equal(tres.path, "tiles/grass_tileset@2x.tres");
+  const img = readPNG(png.data);
+  assert.deepEqual([img.width, img.height], [8 * 8, 6 * 8]);
+  const t = tres.data.toString();
+  assert.match(t, /\[gd_resource type="TileSet" load_steps=3 format=3\]/);
+  assert.match(t, /texture_region_size = Vector2i\(8, 8\)/);
+  assert.equal(t.match(/\/0\/terrain = 0/g)?.length, 48);
+  assert.equal(t.match(/polygon_0\/points = PackedVector2Array\(-4, -4, 4, -4, 4, 4, -4, 4\)/g)?.length, 48);
+  assert.equal(t.match(/probability = 0\.25/g)?.length, 1);
+  // Tile 0 (mask 0) has no peering bits; tile 1 (mask N) has only top_side.
+  assert.match(t, /0:0\/0\/physics_layer_0\/polygon_0\/points = [^\n]+\n1:0\/0 = 0/);
+  assert.match(t, /1:0\/0\/physics_layer_0\/polygon_0\/points = [^\n]+\n1:0\/0\/terrains_peering_bit\/top_side = 0\n2:0\/0 = 0/);
+  assert.match(t, /terrain_set_0\/mode = 0\nterrain_set_0\/terrain_0\/name = "grass"/);
+  assert.match(t, /physics_layer_0\/collision_layer = 1/);
+
+  const grid = make(16, 8, { tileset: { tile: 8, layout: "grid" } });
+  writeRows(grid, 0, "main", ["........11111111"]);
+  const [gpng, gtres] = buildExport(grid, "props", { format: "godot-tileset" });
+  assert.deepEqual([readPNG(gpng.data).width, readPNG(gpng.data).height], [16, 8]);
+  const g = gtres.data.toString();
+  assert.match(g, /\n1:0\/0 = 0\n/);
+  assert.doesNotMatch(g, /0:0\/0 = 0|terrain/);
+  assert.throws(() => buildExport(make(), "x", { format: "godot-tileset" }), /not a tileset/);
+});
+
+test("audit: tileset template checks replace the edge-contact warning", () => {
+  const doc = blobTemplate();
+  const ok = audit(doc, "grass");
+  assert.doesNotMatch(ok, /canvas edge/);
+  assert.match(ok, /Blob tileset: 47 tiles \(13 drawn, 34 composed\) \+ 1 center variant/);
+  assert.match(ok, /quarter\(s\) differ/);
+  applyOps(doc, 0, "main", [{ op: "clear", region: { x: 12, y: 0, w: 4, h: 4 } }]);
+  assert.match(audit(doc, "grass"), /Empty template tile\(s\): \(3,0\) inner corner \(hole at bottom-right\)/);
 });
 
 test("formatGrid adds rulers", () => {

@@ -20,6 +20,7 @@ Tool tips:
 - draw ops are best for geometry, fills, recolors, symmetry and outlines. Ops run in order in one call.
 - Front-facing symmetric art: draw the left half, then draw op mirror (axis "x").
 - UI panels, buttons and bars: read topic "ui" (9-slices, button states, Godot export).
+- Terrain tiles (ground, walls, water): read topic "tiles" (blob autotile template, test map, Godot TileSet).
 - Shade inside a shape without leaking: e.g. ellipse in the shadow color with onlyOn: [body color].
 - write_pixels/draw accept preview:true to get the image back in the same call.
 - draw takes frames: [..] (or allFrames) to apply the same ops to several frames in one call.
@@ -71,13 +72,22 @@ Tool tips:
 - render_preview shows all frames side by side; diff:true outlines in magenta every pixel that changed since the previous frame, so you can confirm that only the intended parts move. The viewer plays the animation; audit reports bounding-box changes (unexpected jumps mean jitter).`,
 
   tiles: `# Tiles and tilesets
-- Sizes: 16×16 standard, 8×8 very retro, 32×32 detailed. One size for a whole tileset.
-- Seamless: the left edge continues the right edge, the top continues the bottom. Check with render_preview tile:true (3×3 repeat). Seams or repeating "hot spots" mean it needs work.
+- Sizes: 16×16 standard, 8×8 very retro, 32×32 detailed. One size for a whole tileset, and the same pixel scale as the sprites.
+- Seamless: the left edge continues the right edge, the top continues the bottom. Seams or repeating "hot spots" mean it needs work.
 - No unique, eye-catching features in repeating ground tiles: one big flower turns into an obvious grid. Spread small details evenly and keep contrast low so characters stay readable on top.
-- Make 2–4 variants of common tiles (manage_asset duplicate, then change details) to break repetition.
 - Light from the top-left, the same as characters.
-- Side-view platform tiles: highlight on the walkable top edge, darker toward the bottom.
-- Terrain edges: plan the full set (center, 4 edges, 4 outer corners, 4 inner corners). Frames of one asset can hold the set; export it as a sheet.`,
+
+Terrain with autotiling (grass, dirt, water, walls): a blob tileset.
+- create_asset with tileset {tile: 16, terrain: "grass"} makes a 7×3-tile template (112×48 at 16 px). Dotquill builds all 47 tiles an engine needs from it.
+- Layout (tile col,row): cols 0–2 are a 3×3 island (outer corners, edges, center (1,1)). Cols 3–5 are solid terrain around one empty cell, the hole (4,1): its four corner cells become the inner corners. Col 6: optional center variants (cracks, flowers), each used about 20% as often as the center.
+- Steps: (1) draw the center tile (1,1) seamless. (2) Copy it into every cell of cols 0–5 except the hole (draw op copy). (3) Draw the same border along the outside of the island and around the inside of the hole: outline, lip, shadow. Cols 3–5 continue into terrain on their outside: no border there. Keep border art inside the outer half of each tile: missing tiles are built from quarter tiles cut at the half lines. (4) render_preview tilemap:true paints a test map with all 47 tiles: fix seams, broken outlines and repetition. audit lists quarters that differ from the copies the built tiles use.
+- The empty side is transparent: put the ground underneath on a lower layer (in Godot a second TileMapLayer).
+- Side-view platforms: grass lip on the top edge, darker toward the bottom; export with collision:true.
+- Export format "godot-tileset": atlas PNG + TileSet .tres with the terrain set up, so Godot picks the right tile per painted cell. Use an outDir inside the Godot project.
+
+Other tiles:
+- Props and decorations: tileset {tile: 16, layout: "grid"} on a canvas of whole tiles; every non-empty cell becomes a tile (also exported by godot-tileset).
+- Single seamless tiles: check with render_preview tile:true (3×3 repeat); make 2–4 variants (manage_asset duplicate) to break repetition.`,
 
   palettes: `# Palettes
 - Each asset has a locked palette (max 88 colors). Use one palette for a whole game or asset set so everything matches.

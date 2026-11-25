@@ -1,6 +1,7 @@
 import { normalizeHex } from "./color.ts";
 import { decodeRows, encodeRows, isEmpty, MAX_COLORS, TRANSPARENT } from "./grid.ts";
 import { validateSlice, type Slice } from "./slices.ts";
+import { validateTileset, type Tileset } from "./tileset.ts";
 
 export interface LayerInfo {
   name: string;
@@ -33,6 +34,7 @@ export interface DocFile {
   frames: { duration: number; cels: Record<string, string[]> }[];
   tags: Tag[];
   slices?: Slice[];
+  tileset?: Tileset;
   notes?: string;
   created: string;
   updated: string;
@@ -89,6 +91,7 @@ export interface CreateOptions {
   frames?: number;
   frameDuration?: number;
   notes?: string;
+  tileset?: Tileset;
 }
 
 interface DocInit {
@@ -100,6 +103,7 @@ interface DocInit {
   frames: Frame[];
   tags: Tag[];
   slices: Slice[];
+  tileset?: Tileset | undefined;
   notes: string;
   created: string;
   updated: string;
@@ -116,6 +120,8 @@ export class PixelDoc {
   tags: Tag[];
   /** Named regions; ones with a center are 9-slices for UI. */
   slices: Slice[];
+  /** Set when the canvas is a tileset (a grid of tiles or a blob autotile template). */
+  tileset: Tileset | undefined;
   notes: string;
   created: string;
   updated: string;
@@ -129,6 +135,7 @@ export class PixelDoc {
     this.frames = d.frames;
     this.tags = d.tags;
     this.slices = d.slices;
+    this.tileset = d.tileset;
     this.notes = d.notes;
     this.created = d.created;
     this.updated = d.updated;
@@ -144,6 +151,7 @@ export class PixelDoc {
       throw new Error(`Frame count must be 1..${MAX_FRAMES}.`);
     }
     const duration = checkDuration(o.frameDuration ?? 100);
+    const tileset = o.tileset ? validateTileset(o.tileset, o.width, o.height) : undefined;
     const now = new Date().toISOString();
     return new PixelDoc({
       width: o.width,
@@ -154,6 +162,7 @@ export class PixelDoc {
       frames: Array.from({ length: count }, () => ({ duration, cels: new Map() })),
       tags: [],
       slices: [],
+      tileset,
       notes: o.notes ?? "",
       created: now,
       updated: now,
@@ -192,6 +201,7 @@ export class PixelDoc {
         direction: (["forward", "reverse", "pingpong"].includes(t.direction) ? t.direction : "forward") as TagDirection,
       }));
     const slices = (d.slices ?? []).map((s) => validateSlice(s, width, height));
+    const tileset = d.tileset ? validateTileset(d.tileset, width, height) : undefined;
     return new PixelDoc({
       width,
       height,
@@ -201,6 +211,7 @@ export class PixelDoc {
       frames,
       tags,
       slices,
+      tileset,
       notes: d.notes ?? "",
       created: d.created ?? new Date().toISOString(),
       updated: d.updated ?? new Date().toISOString(),
@@ -229,6 +240,7 @@ export class PixelDoc {
     };
     if (this.paletteName) out.paletteName = this.paletteName;
     if (this.slices.length) out.slices = this.slices.map((s) => JSON.parse(JSON.stringify(s)) as Slice);
+    if (this.tileset) out.tileset = { ...this.tileset };
     if (this.notes) out.notes = this.notes;
     return out;
   }
