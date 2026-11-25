@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -7,11 +7,12 @@ import { audit } from "../src/core/audit.ts";
 import { readPNG } from "../src/core/bitmap.ts";
 import { PixelDoc } from "../src/core/doc.ts";
 import { applyOps, ellipseMask, resolveColor, writeRows } from "../src/core/draw.ts";
-import { buildExport } from "../src/core/export.ts";
+import { buildExport, findGodotResDir } from "../src/core/export.ts";
 import { encodeRows, formatGrid } from "../src/core/grid.ts";
 import { imageToDoc } from "../src/core/importer.ts";
 import { PRESETS } from "../src/core/palettes.ts";
 import { renderPreview } from "../src/core/render.ts";
+import { nineSlice, sliceFromMargins, validateSlice } from "../src/core/slices.ts";
 import { Workspace } from "../src/core/store.ts";
 
 const PAL = PRESETS["sweetie-16"].colors;
@@ -206,6 +207,57 @@ test("preview diff counts pixels changed since the previous frame", () => {
   const p = renderPreview(doc, { diff: true });
   assert.match(p.description, /f0 0 px, f1 2 px, f2 2 px/);
   assert.match(renderPreview(make(), { diff: true }).description, /single frame/);
+});
+
+test("9-slice: stretch and tile keep corners, validation catches bad margins", () => {
+  const doc = make(4, 3);
+  writeRows(doc, 0, "main", ["0ab9", "1cd8", "2ef7"]);
+  const s = sliceFromMargins("bar", { x: 0, y: 0, w: 4, h: 3 }, { left: 1, top: 1, right: 1, bottom: 1 });
+  const stretched = encodeRows(nineSlice(doc.composite(0), 4, s, 7, 4), 7, 4);
+  assert.deepEqual(stretched, ["0aaabb9", "1cccdd8", "1cccdd8", "2eeeff7"]);
+  const tiled = encodeRows(nineSlice(doc.composite(0), 4, { ...s, mode: "tile" }, 7, 3), 7, 3);
+  assert.deepEqual(tiled, ["0ababa9", "1cdcdc8", "2efefe7"]);
+  assert.throws(() => nineSlice(doc.composite(0), 4, s, 2, 3), /Stretch size/);
+  assert.throws(() => sliceFromMargins("x", { x: 0, y: 0, w: 4, h: 3 }, { left: 2, top: 0, right: 2, bottom: 0 }), /no center/);
+  assert.throws(() => validateSlice({ name: "big", bounds: { x: 2, y: 0, w: 4, h: 3 } }, 4, 3), /outside/);
+});
+
+test("slices survive the file format and reach the exports", async () => {
+  const doc = make(8, 8, { frames: 2 });
+  for (const f of [0, 1]) applyOps(doc, f, "main", [{ op: "rect", x: 0, y: 0, w: 8, h: 8, color: String(f + 1), fill: true }]);
+  doc.slices.push(sliceFromMargins("panel", { x: 0, y: 0, w: 8, h: 8 }, { left: 3, top: 2, right: 3, bottom: 2 }, "tile"));
+  doc.tags.push({ name: "Hover", from: 1, to: 1, direction: "forward" });
+  const back = PixelDoc.fromJSON(JSON.parse(JSON.stringify(doc.toJSON())));
+  assert.deepEqual(back.slices, doc.slices);
+
+  const [, json] = buildExport(back, "ui/panel", { format: "sheet", scale: 2 });
+  const slice = JSON.parse(json.data.toString()).meta.slices[0];
+  assert.deepEqual(slice.keys[0].center, { x: 6, y: 4, w: 4, h: 8 });
+
+  const files = buildExport(back, "ui/panel", { format: "godot-stylebox", scale: 2 });
+  assert.deepEqual(files.map((f) => f.path), ["ui/panel_sheet@2x.png", "ui/panel_0@2x.tres", "ui/panel_hover@2x.tres"]);
+  const hover = files[2].data.toString();
+  assert.match(hover, /path="panel_sheet@2x.png"/);
+  assert.match(hover, /texture_margin_left = 6\.0[\s\S]*texture_margin_bottom = 4\.0/);
+  assert.match(hover, /axis_stretch_horizontal = 1/);
+  assert.match(hover, /region_rect = Rect2\(16, 0, 16, 16\)/);
+  const res = buildExport(back, "ui/panel", { format: "godot-stylebox", resDir: "res://art/" });
+  assert.match(res[1].data.toString(), /path="res:\/\/art\/ui\/panel_sheet.png"/);
+  assert.throws(() => buildExport(make(), "x", { format: "godot-stylebox" }), /no 9-slice/);
+
+  const p = renderPreview(back, { stretch: [20, 12] });
+  assert.match(p.description, /stretched to 20×12 through 9-slice "panel" \(tile\)/);
+  assert.match(renderPreview(back).description, /Yellow dashed lines/);
+
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dotquill-godot-"));
+  try {
+    await writeFile(path.join(dir, "project.godot"), "");
+    await mkdir(path.join(dir, "assets", "ui"), { recursive: true });
+    assert.equal(await findGodotResDir(path.join(dir, "assets", "ui")), "res://assets/ui/");
+    assert.equal(await findGodotResDir(dir), "res://");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("formatGrid adds rulers", () => {

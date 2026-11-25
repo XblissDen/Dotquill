@@ -3,10 +3,11 @@ import path from "node:path";
 import gifenc from "gifenc";
 import { Bitmap, paletteRGB } from "./bitmap.ts";
 import type { PixelDoc } from "./doc.ts";
+import { marginsOf, type Rect } from "./slices.ts";
 import { VERSION } from "./version.ts";
 
-export type ExportFormat = "png" | "frames" | "sheet" | "gif";
-export const EXPORT_FORMATS: readonly ExportFormat[] = ["png", "frames", "sheet", "gif"];
+export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox";
+export const EXPORT_FORMATS: readonly ExportFormat[] = ["png", "frames", "sheet", "gif", "godot-stylebox"];
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -21,6 +22,38 @@ export interface ExportOptions {
   /** Sheet spacing between frames in output pixels. */
   padding?: number;
   layer?: string;
+  /** godot-stylebox: which 9-slice (default: the first one). */
+  slice?: string;
+  /** godot-stylebox: res:// folder the files land in (e.g. "res://ui/"); otherwise texture paths are relative. */
+  resDir?: string;
+}
+
+/** Finds the Godot project containing dir and returns dir as a res:// folder ("res://ui/"), or null. */
+export async function findGodotResDir(dir: string): Promise<string | null> {
+  const target = path.resolve(dir);
+  let cur = target;
+  for (;;) {
+    try {
+      await fs.access(path.join(cur, "project.godot"));
+      const rel = path.relative(cur, target).split(path.sep).join("/");
+      return `res://${rel ? `${rel}/` : ""}`;
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      cur = parent;
+    }
+  }
+}
+
+function scaleRect(r: Rect, s: number): Rect {
+  return { x: r.x * s, y: r.y * s, w: r.w * s, h: r.h * s };
+}
+
+/** Single-frame tag names make nice state names (normal, hover, pressed). */
+function frameLabel(doc: PixelDoc, f: number, count: number): string {
+  const tag = doc.tags.find((t) => t.from === f && t.to === f);
+  if (tag) return tag.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+  return count > 1 ? String(f) : "";
 }
 
 export interface ExportFile {
@@ -55,6 +88,22 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
     b.drawIndexed(composite(f), doc.width, doc.height, pal, 0, 0, scale);
     return b;
   };
+  const layoutSheet = (frames: number[]) => {
+    const n = frames.length;
+    const cols = Math.max(1, Math.min(n, o.columns ?? (n <= 16 ? n : Math.ceil(Math.sqrt(n)))));
+    const rows = Math.ceil(n / cols);
+    const pad = Math.max(0, o.padding ?? 0);
+    const sheetW = cols * W + (cols - 1) * pad;
+    const sheetH = rows * H + (rows - 1) * pad;
+    const sheet = new Bitmap(sheetW, sheetH);
+    const pos = frames.map((f, k) => {
+      const x = (k % cols) * (W + pad);
+      const y = Math.floor(k / cols) * (H + pad);
+      sheet.drawIndexed(composite(f), doc.width, doc.height, pal, x, y, scale);
+      return { x, y };
+    });
+    return { sheet, pos, sheetW, sheetH };
+  };
 
   switch (o.format) {
     case "png": {
@@ -72,18 +121,11 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
     case "sheet": {
       const frames = selectFrames(doc, o.tag);
       const n = frames.length;
-      const cols = Math.max(1, Math.min(n, o.columns ?? (n <= 16 ? n : Math.ceil(Math.sqrt(n)))));
-      const rows = Math.ceil(n / cols);
-      const pad = Math.max(0, o.padding ?? 0);
-      const sheetW = cols * W + (cols - 1) * pad;
-      const sheetH = rows * H + (rows - 1) * pad;
-      const sheet = new Bitmap(sheetW, sheetH);
+      const { sheet, pos, sheetW, sheetH } = layoutSheet(frames);
       const base = name.split("/").pop()!;
       const image = `${base}_sheet${suffix}.png`;
       const entries = frames.map((f, k) => {
-        const x = (k % cols) * (W + pad);
-        const y = Math.floor(k / cols) * (H + pad);
-        sheet.drawIndexed(composite(f), doc.width, doc.height, pal, x, y, scale);
+        const { x, y } = pos[k];
         return {
           filename: `${base} ${f}`,
           frame: { x, y, w: W, h: H },
@@ -111,13 +153,56 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
           scale: String(scale),
           frameTags: tags,
           layers: [],
-          slices: [],
+          // Aseprite slice format; bounds are per frame (sprite coordinates), scaled.
+          slices: doc.slices.map((s) => ({
+            name: s.name,
+            color: "#0000ffff",
+            keys: [{ frame: 0, bounds: scaleRect(s.bounds, scale), ...(s.center ? { center: scaleRect(s.center, scale) } : {}) }],
+          })),
         },
       };
       return [
         { path: `${name}_sheet${suffix}.png`, data: sheet.toPNG(), mime: "image/png" },
         { path: `${name}_sheet${suffix}.json`, data: Buffer.from(JSON.stringify(json, null, 2)), mime: "application/json" },
       ];
+    }
+    case "godot-stylebox": {
+      // One texture + a StyleBoxTexture .tres per frame (button states → normal/hover/pressed via single-frame tags).
+      const slice = doc.nineSlice(o.slice);
+      const m = marginsOf(slice)!;
+      const frames = selectFrames(doc, o.tag);
+      const { sheet, pos } = layoutSheet(frames);
+      const base = name.split("/").pop()!;
+      const folder = name.includes("/") ? name.slice(0, name.lastIndexOf("/") + 1) : "";
+      const png = frames.length > 1 ? `${base}_sheet${suffix}.png` : `${base}${suffix}.png`;
+      const texPath = o.resDir ? `${o.resDir}${folder}${png}` : png;
+      const b = scaleRect(slice.bounds, scale);
+      const tile = slice.mode === "tile";
+      const files: ExportFile[] = [{ path: `${folder}${png}`, data: sheet.toPNG(), mime: "image/png" }];
+      frames.forEach((f, k) => {
+        const label = frameLabel(doc, f, frames.length);
+        const tres = [
+          '[gd_resource type="StyleBoxTexture" load_steps=2 format=3]',
+          "",
+          `[ext_resource type="Texture2D" path="${texPath}" id="1_tex"]`,
+          "",
+          "[resource]",
+          'texture = ExtResource("1_tex")',
+          `texture_margin_left = ${m.left * scale}.0`,
+          `texture_margin_top = ${m.top * scale}.0`,
+          `texture_margin_right = ${m.right * scale}.0`,
+          `texture_margin_bottom = ${m.bottom * scale}.0`,
+          ...(tile ? ["axis_stretch_horizontal = 1", "axis_stretch_vertical = 1"] : []),
+          `region_rect = Rect2(${pos[k].x + b.x}, ${pos[k].y + b.y}, ${b.w}, ${b.h})`,
+          "",
+        ].join("\n");
+        files.push({
+          path: `${folder}${base}${label ? `_${label}` : ""}${suffix}.tres`,
+          data: Buffer.from(tres),
+          mime: "text/plain",
+        });
+      });
+      return files;
     }
     case "gif": {
       const frames = selectFrames(doc, o.tag);

@@ -189,6 +189,28 @@ function render() {
     ctx.lineWidth = 1;
     ctx.strokeRect(W * z + 0.5, H * z + 0.5, W * z - 1, H * z - 1);
   }
+  const nine = (d.slices || []).filter((s) => s.center);
+  if (R === 1 && nine.length && $("slices").checked) {
+    // 9-slice guides: outside the lines corners/edges keep their size; inside stretches.
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,214,0,0.9)";
+    ctx.lineWidth = Math.max(1, Math.floor(z / 8));
+    const dash = Math.max(3, Math.floor(z / 2));
+    ctx.setLineDash([dash, dash]);
+    ctx.beginPath();
+    for (const { bounds: b, center: c } of nine) {
+      for (const gx of [b.x + c.x, b.x + c.x + c.w]) {
+        ctx.moveTo(gx * z, b.y * z);
+        ctx.lineTo(gx * z, (b.y + b.h) * z);
+      }
+      for (const gy of [b.y + c.y, b.y + c.y + c.h]) {
+        ctx.moveTo(b.x * z, gy * z);
+        ctx.lineTo((b.x + b.w) * z, gy * z);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
   $("zoomLabel").textContent = `${z}×`;
   for (const b of $("frames").children) b.classList.toggle("active", Number(b.dataset.f) === state.frame);
 }
@@ -244,6 +266,10 @@ function buildTimeline() {
     }),
   );
   $("play").disabled = d.frames.length < 2;
+  const hasNine = (d.slices || []).some((s) => s.center);
+  $("slicesToggle").hidden = !hasNine;
+  $("expGodot").disabled = !hasNine;
+  if (!hasNine && $("expFormat").value === "godot-stylebox") $("expFormat").value = "sheet";
 }
 
 function renderInspector() {
@@ -259,6 +285,15 @@ function renderInspector() {
     ["Colors", `${used.size} used of ${d.palette.length}`],
     ["Updated", relTime(d.updated)],
   ];
+  for (const s of d.slices || []) {
+    const { bounds: b, center: c } = s;
+    rows.push([
+      "Slice",
+      c
+        ? `${s.name}: 9-slice, borders L${c.x} T${c.y} R${b.w - c.x - c.w} B${b.h - c.y - c.h}, ${s.mode || "stretch"}`
+        : `${s.name}: ${b.w}×${b.h} at ${b.x},${b.y}`,
+    ]);
+  }
   if (d.notes) rows.push(["Notes", d.notes]);
   $("meta").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
 
@@ -462,7 +497,7 @@ $("zoomLabel").onclick = () => {
   state.fit = true;
   render();
 };
-for (const id of ["grid", "onion", "bg", "tile"]) $(id).onchange = render;
+for (const id of ["grid", "onion", "bg", "tile", "slices"]) $(id).onchange = render;
 window.addEventListener("hashchange", () => {
   const name = decodeURIComponent(location.hash.slice(1));
   if (name && name !== state.name) select(name);
@@ -541,6 +576,9 @@ window.addEventListener("keydown", (e) => {
       break;
     case "t":
       toggle("tile");
+      break;
+    case "s":
+      toggle("slices");
       break;
     default:
       return;

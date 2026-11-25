@@ -49,13 +49,13 @@ async function call(name: string, args: Record<string, unknown>, expectError = f
   return text;
 }
 
-const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported", "smoke/anim"];
+const SCRATCH = ["smoke/shapes", "smoke/shapes-copy", "smoke/imported", "smoke/anim", "smoke/button"];
 // Leftovers from an interrupted run (errors ignored).
 for (const n of SCRATCH) await client.callTool({ name: "manage_asset", arguments: { action: "delete", name: n } });
 
 const tools = (await client.listTools()).tools.map((t) => t.name);
 console.log(`Tools (${tools.length}): ${tools.join(", ")}`);
-assert.equal(tools.length, 15);
+assert.equal(tools.length, 16);
 
 await call("guide", { topic: "workflow" });
 
@@ -187,6 +187,39 @@ const diffed = await call("render_preview", { name: "smoke/anim", diff: true });
 assert.match(diffed, /Magenta squares.*f0 \d+ px, f1 \d+ px, f2 0 px/);
 await call("manage_asset", { action: "notes", name: "smoke/anim", notes: "Box slides right on frames 1-2." });
 assert.match(await call("get_asset", { name: "smoke/anim" }), /Notes: Box slides right/);
+
+// Pixel UI: a 3-state 9-slice button exported into a (fake) Godot project.
+await call("create_asset", { name: "smoke/button", width: 12, height: 12, frames: 3, overwrite: true });
+await call("draw", {
+  name: "smoke/button",
+  allFrames: true,
+  ops: [
+    { op: "rect", x: 0, y: 0, w: 12, h: 12, color: "p", fill: true },
+    { op: "rect", x: 1, y: 1, w: 10, h: 10, color: "m", fill: true },
+    { op: "line", points: [[1, 1], [10, 1]], color: "k" },
+  ],
+});
+await call("draw", { name: "smoke/button", frame: 2, ops: [{ op: "replace", from: "m", to: "l" }] });
+await call("frames", {
+  name: "smoke/button",
+  ops: [
+    { action: "tag", name: "normal", from: 0, to: 0 },
+    { action: "tag", name: "hover", from: 1, to: 1 },
+    { action: "tag", name: "pressed", from: 2, to: 2 },
+  ],
+});
+assert.match(
+  await call("slices", { name: "smoke/button", ops: [{ action: "set", slice: "face", nine: { left: 3, top: 3, right: 3, bottom: 3 } }] }),
+  /9-slice margins L3 T3 R3 B3/,
+);
+assert.match(await call("render_preview", { name: "smoke/button", frames: [0] }), /Yellow dashed lines/);
+assert.match(await call("render_preview", { name: "smoke/button", stretch: [40, 16] }), /stretched to 40×16/);
+const godotDir = path.join(dir, "godot-game");
+await mkdir(path.join(godotDir, "ui"), { recursive: true });
+await writeFile(path.join(godotDir, "project.godot"), "");
+const exported = await call("export", { name: "smoke/button", format: "godot-stylebox", scale: 4, outDir: path.join(godotDir, "ui") });
+assert.match(exported, /button_pressed@4x\.tres/);
+assert.match(exported, /textures referenced as res:\/\/ui\//);
 await call("list_assets", {});
 for (const n of SCRATCH) await call("manage_asset", { action: "delete", name: n });
 

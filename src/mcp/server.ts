@@ -17,12 +17,13 @@ import { readPNG } from "../core/bitmap.ts";
 import { ColorMatcher, lightness, normalizeHex, parseHex } from "../core/color.ts";
 import { checkDuration, MAX_FRAMES, PixelDoc, validateLayerName, validatePalette, type TagDirection } from "../core/doc.ts";
 import { applyOps, resolveColor, writeRows, type DrawOp } from "../core/draw.ts";
-import { buildExport, writeExport } from "../core/export.ts";
+import { buildExport, findGodotResDir, writeExport } from "../core/export.ts";
 import { encodeRows, formatGrid, indexToChar, MAX_COLORS } from "../core/grid.ts";
 import { GUIDE, GUIDE_TOPICS } from "../core/guide.ts";
 import { imageToDoc } from "../core/importer.ts";
 import { DEFAULT_PRESET, PRESETS, resolvePalette, type PaletteSpec } from "../core/palettes.ts";
 import { renderPreview } from "../core/render.ts";
+import { describeSlice, sliceFromMargins, validateSlice, validateSliceName, type Slice } from "../core/slices.ts";
 import { validateName, Workspace } from "../core/store.ts";
 import { VERSION } from "../core/version.ts";
 import { openBrowser, startViewer } from "../viewer/server.ts";
@@ -93,9 +94,10 @@ async function edit<T>(name: string, fn: (doc: PixelDoc) => Promise<T> | T): Pro
 function summary(name: string, doc: PixelDoc): string {
   const layers = doc.layers.map((l) => (l.visible ? l.name : `${l.name} (hidden)`)).join(", ");
   const tags = doc.tags.length ? ` · tags: ${doc.tags.map((t) => `${t.name} ${t.from}–${t.to}`).join(", ")}` : "";
+  const slices = doc.slices.length ? ` · slices: ${doc.slices.map((s) => (s.center ? `${s.name} (9-slice)` : s.name)).join(", ")}` : "";
   return (
     `"${name}" ${doc.width}×${doc.height} · ${doc.frames.length} frame${doc.frames.length > 1 ? "s" : ""}` +
-    ` · layers (bottom→top): ${layers} · palette ${doc.paletteName ?? "custom"} (${doc.palette.length} colors)${tags}`
+    ` · layers (bottom→top): ${layers} · palette ${doc.paletteName ?? "custom"} (${doc.palette.length} colors)${tags}${slices}`
   );
 }
 
@@ -243,7 +245,7 @@ const zLayerOp = z.discriminatedUnion("action", [
 // ---------- server ----------
 
 const INSTRUCTIONS = `Dotquill is a local pixel-art studio. You draw palette-indexed pixels; the user watches live in a browser viewer (open_viewer) and exports assets for their game.
-Before your first drawing in a session, read guide (topic "workflow"); read other topics when relevant (sprites, shading, outlines, animation, tiles, palettes).
+Before your first drawing in a session, read guide (topic "workflow"); read other topics when relevant (sprites, shading, outlines, animation, tiles, palettes, ui).
 Coordinates: x → right, y ↓ down, (0,0) top-left. One character per pixel from the palette legend; "." = transparent.
 Always check your work with render_preview (rulers, grid, actual-size copies) and fix problems before calling an asset done; run audit at the end.
 Assets are files <workspace>/<name>.pixel.json (workspace: ${ws.root}). Exports go to <workspace>/exports unless outDir is given.`;
@@ -367,6 +369,7 @@ server.registerTool(
       const out = [summary(name, doc)];
       if (doc.notes) out.push(`Notes: ${doc.notes}`);
       out.push("Palette legend:", legend(doc));
+      if (doc.slices.length) out.push("Slices:", ...doc.slices.map((s) => `  ${describeSlice(s)}`));
       for (const f of frames) {
         const rows = encodeRows(doc.composite(f, layer ? { layer } : {}), doc.width, doc.height);
         out.push(
@@ -452,7 +455,7 @@ server.registerTool(
   {
     title: "Render preview",
     description:
-      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles and diff:true to check animation.",
+      "Renders the asset as an image for you to inspect: zoomed with x/y rulers and a pixel grid (blue every 8 px), checkerboard transparency, 9-slice guides, plus actual-size 1× and 2× copies. Shows all frames side by side by default. Use tile:true to check seamless tiles, diff:true to check animation, stretch:[w,h] to check UI resizing.",
     inputSchema: {
       name: zName,
       frames: z.array(zInt).optional().describe("Frames to show (default all, max 16)."),
@@ -465,6 +468,12 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Outline (magenta) every pixel that changed since the previous frame; frame 0 is compared with the last. Lists changed-pixel counts."),
+      stretch: z
+        .array(z.number().int().min(1).max(512))
+        .length(2)
+        .optional()
+        .describe("[w, h]: show the frames resized through the 9-slice to this size, e.g. [96, 40]. Checks that a panel or button resizes cleanly."),
+      slice: z.string().optional().describe("Slice for stretch (default: the first 9-slice)."),
     },
     annotations: { readOnlyHint: true },
   },
@@ -480,6 +489,8 @@ server.registerTool(
         ...(a.layer !== undefined ? { layer: a.layer } : {}),
         ...(a.tile ? { tile: true } : {}),
         ...(a.diff ? { diff: true } : {}),
+        ...(a.stretch ? { stretch: [a.stretch[0], a.stretch[1]] as [number, number] } : {}),
+        ...(a.slice !== undefined ? { slice: a.slice } : {}),
       });
       return ok(`${summary(name, doc)}\n${p.description}`, [imageContent(p.png)]);
     }),
@@ -727,6 +738,69 @@ server.registerTool(
     }),
 );
 
+const zSliceOp = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("set"),
+    slice: z.string().describe('Slice name, e.g. "panel". Replaces a slice with the same name.'),
+    x: zInt.optional().describe("Bounds (default: the whole canvas)."),
+    y: zInt.optional(),
+    w: zPos.optional(),
+    h: zPos.optional(),
+    nine: z
+      .object({
+        left: z.number().int().min(0),
+        top: z.number().int().min(0),
+        right: z.number().int().min(0),
+        bottom: z.number().int().min(0),
+      })
+      .optional()
+      .describe("9-slice border widths in px: corners keep their size, edges and center stretch. Omit for a plain named region."),
+    mode: z
+      .enum(["stretch", "tile"])
+      .optional()
+      .describe('How edges and center fill extra space: "stretch" (default, like Godot) or "tile" (repeat; best for patterned borders).'),
+  }),
+  z.object({ action: z.literal("delete"), slice: z.string() }),
+]);
+
+server.registerTool(
+  "slices",
+  {
+    title: "Slices (9-slice UI)",
+    description:
+      'Named canvas regions. With nine margins a slice becomes a 9-slice for UI panels, buttons and bars: corners stay fixed, edges and center stretch or tile. Shown as guides in previews; check resizing with render_preview stretch. Exported in sheet JSON (Aseprite slices) and as Godot StyleBoxTexture (export format "godot-stylebox").',
+    inputSchema: { name: zName, ops: z.array(zSliceOp).min(1) },
+  },
+  async (a) =>
+    run(async () => {
+      const { doc, result, name } = await edit(a.name, (d) => {
+        const notes: string[] = [];
+        for (const op of a.ops) {
+          const sliceName = validateSliceName(op.slice);
+          const idx = d.slices.findIndex((s) => s.name.toLowerCase() === sliceName.toLowerCase());
+          if (op.action === "delete") {
+            if (idx < 0) throw new Error(`No slice "${sliceName}".`);
+            d.slices.splice(idx, 1);
+            notes.push(`deleted slice ${sliceName}`);
+            continue;
+          }
+          const x = op.x ?? 0;
+          const y = op.y ?? 0;
+          const bounds = { x, y, w: op.w ?? d.width - x, h: op.h ?? d.height - y };
+          const raw: Slice = op.nine
+            ? sliceFromMargins(sliceName, bounds, op.nine, op.mode)
+            : { name: sliceName, bounds, ...(op.mode ? { mode: op.mode } : {}) };
+          const slice = validateSlice(raw, d.width, d.height);
+          if (idx >= 0) d.slices[idx] = slice;
+          else d.slices.push(slice);
+          notes.push(`set ${describeSlice(slice)}`);
+        }
+        return notes;
+      });
+      return ok(`${result.join("\n")}\n${summary(name, doc)}`);
+    }),
+);
+
 server.registerTool(
   "audit",
   {
@@ -748,10 +822,11 @@ server.registerTool(
   {
     title: "Export",
     description:
-      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations and tags), "gif" (animated preview). Writes to <workspace>/exports by default, or to outDir (e.g. a folder inside the game project).',
+      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
     inputSchema: {
       name: zName,
-      format: z.enum(["png", "frames", "sheet", "gif"]),
+      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox"]),
+      slice: z.string().optional().describe("godot-stylebox: which 9-slice (default: the first)."),
       scale: z.number().int().min(1).max(32).optional().describe("Integer upscale (default 1)."),
       frame: zInt.optional().describe('For "png" (default 0).'),
       tag: z.string().optional().describe("Only this tag's frames."),
@@ -764,6 +839,9 @@ server.registerTool(
     run(async () => {
       const name = validateName(a.name);
       const doc = await ws.load(name);
+      const outDir = a.outDir ? path.resolve(ws.root, a.outDir) : ws.exportsDir;
+      const godot = a.format === "godot-stylebox";
+      const resDir = godot ? await findGodotResDir(outDir) : null;
       const files = buildExport(doc, name, {
         format: a.format,
         ...(a.scale ? { scale: a.scale } : {}),
@@ -771,10 +849,20 @@ server.registerTool(
         ...(a.tag ? { tag: a.tag } : {}),
         ...(a.columns ? { columns: a.columns } : {}),
         ...(a.padding !== undefined ? { padding: a.padding } : {}),
+        ...(a.slice !== undefined ? { slice: a.slice } : {}),
+        ...(resDir ? { resDir } : {}),
       });
-      const outDir = a.outDir ? path.resolve(ws.root, a.outDir) : ws.exportsDir;
       const paths = await writeExport(files, outDir);
-      return ok(`Exported "${name}" (${a.format}) to ${outDir}:\n${paths.map((p, i) => `- ${p} (${files[i].data.length} bytes)`).join("\n")}`);
+      const lines = [`Exported "${name}" (${a.format}) to ${outDir}:`, ...paths.map((p, i) => `- ${p} (${files[i].data.length} bytes)`)];
+      if (godot) {
+        lines.push(
+          resDir
+            ? `Godot project found: textures referenced as ${resDir}….`
+            : "No project.godot above outDir: the .tres files reference the PNG by a relative path (keep them in the same folder).",
+          "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme. For crisp pixels set Project Settings → Rendering → Textures → Default Texture Filter = Nearest.",
+        );
+      }
+      return ok(lines.join("\n"));
     }),
 );
 

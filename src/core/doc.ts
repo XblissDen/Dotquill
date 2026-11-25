@@ -1,5 +1,6 @@
 import { normalizeHex } from "./color.ts";
 import { decodeRows, encodeRows, isEmpty, MAX_COLORS, TRANSPARENT } from "./grid.ts";
+import { validateSlice, type Slice } from "./slices.ts";
 
 export interface LayerInfo {
   name: string;
@@ -31,6 +32,7 @@ export interface DocFile {
   layers: LayerInfo[];
   frames: { duration: number; cels: Record<string, string[]> }[];
   tags: Tag[];
+  slices?: Slice[];
   notes?: string;
   created: string;
   updated: string;
@@ -97,6 +99,7 @@ interface DocInit {
   layers: LayerInfo[];
   frames: Frame[];
   tags: Tag[];
+  slices: Slice[];
   notes: string;
   created: string;
   updated: string;
@@ -111,6 +114,8 @@ export class PixelDoc {
   layers: LayerInfo[];
   frames: Frame[];
   tags: Tag[];
+  /** Named regions; ones with a center are 9-slices for UI. */
+  slices: Slice[];
   notes: string;
   created: string;
   updated: string;
@@ -123,6 +128,7 @@ export class PixelDoc {
     this.layers = d.layers;
     this.frames = d.frames;
     this.tags = d.tags;
+    this.slices = d.slices;
     this.notes = d.notes;
     this.created = d.created;
     this.updated = d.updated;
@@ -147,6 +153,7 @@ export class PixelDoc {
       layers: layerNames.map((name) => ({ name, visible: true })),
       frames: Array.from({ length: count }, () => ({ duration, cels: new Map() })),
       tags: [],
+      slices: [],
       notes: o.notes ?? "",
       created: now,
       updated: now,
@@ -184,6 +191,7 @@ export class PixelDoc {
         to: Math.max(0, Math.min(frames.length - 1, Number(t.to) || 0)),
         direction: (["forward", "reverse", "pingpong"].includes(t.direction) ? t.direction : "forward") as TagDirection,
       }));
+    const slices = (d.slices ?? []).map((s) => validateSlice(s, width, height));
     return new PixelDoc({
       width,
       height,
@@ -192,6 +200,7 @@ export class PixelDoc {
       layers,
       frames,
       tags,
+      slices,
       notes: d.notes ?? "",
       created: d.created ?? new Date().toISOString(),
       updated: d.updated ?? new Date().toISOString(),
@@ -219,8 +228,26 @@ export class PixelDoc {
       updated: this.updated,
     };
     if (this.paletteName) out.paletteName = this.paletteName;
+    if (this.slices.length) out.slices = this.slices.map((s) => JSON.parse(JSON.stringify(s)) as Slice);
     if (this.notes) out.notes = this.notes;
     return out;
+  }
+
+  /** The named slice, or the first 9-slice when no name is given. */
+  nineSlice(name?: string): Slice {
+    const s =
+      name !== undefined
+        ? this.slices.find((x) => x.name.toLowerCase() === name.trim().toLowerCase())
+        : this.slices.find((x) => x.center);
+    if (!s) {
+      throw new Error(
+        name !== undefined
+          ? `No slice "${name}". Slices: ${this.slices.map((x) => x.name).join(", ") || "(none)"}.`
+          : "This asset has no 9-slice. Add one with the slices tool (action set with nine margins).",
+      );
+    }
+    if (!s.center) throw new Error(`Slice "${s.name}" has no 9-slice margins.`);
+    return s;
   }
 
   blank(): Int16Array {

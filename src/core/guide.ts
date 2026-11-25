@@ -19,6 +19,7 @@ Tool tips:
 - write_pixels is best for organic shapes (faces, hair, foliage): write a full sprite or a region as rows.
 - draw ops are best for geometry, fills, recolors, symmetry and outlines. Ops run in order in one call.
 - Front-facing symmetric art: draw the left half, then draw op mirror (axis "x").
+- UI panels, buttons and bars: read topic "ui" (9-slices, button states, Godot export).
 - Shade inside a shape without leaking: e.g. ellipse in the shadow color with onlyOn: [body color].
 - write_pixels/draw accept preview:true to get the image back in the same call.
 - draw takes frames: [..] (or allFrames) to apply the same ops to several frames in one call.
@@ -84,6 +85,19 @@ Tool tips:
 - Keep a set consistent with { "fromAsset": "other-asset" }.
 - palette action "set" switches palettes: remap "nearest" maps pixels to the closest new color; remap "index" keeps indices (palette swap for recolors and team colors).
 - The legend shows L (lightness 0–100) for each color. Pick ramp tones roughly 10–20 L apart.`,
+
+  ui: `# UI: panels, buttons, bars, icons
+- Pixel-art UI is raster too: draw it at the game's base resolution (e.g. 320×180, 480×270); the engine scales by whole numbers with Nearest filtering. Use the same pixel size as the sprites.
+- Panels, windows, buttons and bars are 9-slices: draw a small source (16×16 to 32×32), then slices → set with nine margins (border widths). Corners keep their size; edges and center stretch or tile.
+- Keep the stretchable parts plain: no gradient along the stretch direction and no unique details in the middle of an edge. Put ornaments in the corners.
+- mode "tile" for patterned borders (rivets, stitches, bricks); "stretch" (default) for flat fills.
+- Check every 9-slice with render_preview stretch at a few sizes (wide, tall, small), e.g. [96, 32] and [32, 64], and fix what breaks. Normal previews show the 9-slice guides as yellow dashed lines.
+- Buttons: one asset, one frame per state (normal, hover, pressed, disabled) with single-frame tags named after the states; the 9-slice applies to every frame. Pressed: face 1 px lower and slightly darker; hover: a bit lighter; disabled: desaturated, low contrast.
+- Readability: 1 px dark outline; light edge toward the light (top), dark edge at the bottom; keep ≥ 2 px inner padding for content.
+- Bars (health, mana): a 9-slice frame plus a separate fill asset; keep the end caps inside the margins.
+- Icons: 8×8 to 16×16, centered, 1 px outline, readable at 1×.
+- Export: format "godot-stylebox" writes the PNG and a StyleBoxTexture .tres per frame (use outDir inside the Godot project for res:// paths). The sheet JSON carries the slices in Aseprite format for other engines.
+- Text is not drawn here: leave room for a 5–8 px pixel font.`,
 };
 
 export const GUIDE_TOPICS = Object.keys(GUIDE);

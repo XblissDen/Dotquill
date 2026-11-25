@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { indexedToPNG } from "../core/bitmap.ts";
-import { buildExport, EXPORT_FORMATS, writeExport, type ExportFormat } from "../core/export.ts";
+import { buildExport, EXPORT_FORMATS, findGodotResDir, writeExport, type ExportFormat } from "../core/export.ts";
 import { EXT, META_DIR, validateName, type Workspace } from "../core/store.ts";
 import { VERSION } from "../core/version.ts";
 
@@ -170,11 +170,15 @@ function createServer(ws: Workspace, port: number): { server: http.Server; stop:
       const name = validateName(body.name ?? "");
       if (!EXPORT_FORMATS.includes(body.format as ExportFormat)) throw new HttpError(400, "Unknown format");
       const doc = await ws.load(name);
+      // Saved Godot styleboxes use res:// paths when the workspace lives inside a Godot project.
+      const resDir =
+        body.mode === "save" && body.format === "godot-stylebox" ? await findGodotResDir(ws.exportsDir) : null;
       const files = buildExport(doc, name, {
         format: body.format as ExportFormat,
         ...(body.scale ? { scale: Number(body.scale) } : {}),
         ...(Number.isInteger(body.frame) ? { frame: body.frame } : {}),
         ...(body.tag ? { tag: body.tag } : {}),
+        ...(resDir ? { resDir } : {}),
       });
       if (body.mode === "save") {
         const paths = await writeExport(files, ws.exportsDir);

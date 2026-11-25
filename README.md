@@ -18,7 +18,8 @@ Claude gets drawing tools over [MCP](https://modelcontextprotocol.io): palette-l
 - **Drawing**: pixel rows, lines, rectangles, ellipses, flood fill, color replace, outlines, mirroring, flip, shift, copy/move regions, dithering, and `onlyOn` masks for shading inside a shape.
 - **Animation**: frames, durations, tags (idle, walk…), playback and onion skin in the viewer.
 - **Layers**: add, reorder, hide, merge.
-- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON (Phaser, PixiJS, Godot and other importers), animated GIF. Integer upscaling.
+- **Pixel UI (9-slice)**: panels, buttons and bars with fixed corners and stretching or tiling edges; button states as frames; resize check in the preview.
+- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `StyleBoxTexture` for 9-slice UI. Integer upscaling.
 - **Import**: PNG to asset, with palette quantization, sheet slicing and downscaling of upscaled art.
 
 ## Requirements
@@ -69,20 +70,30 @@ Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `
 
 | Tool | What it does |
 |---|---|
-| `guide` | Pixel-art workflow and techniques (sprites, shading, outlines, animation, tiles, palettes). |
+| `guide` | Pixel-art workflow and techniques (sprites, shading, outlines, animation, tiles, palettes, UI). |
 | `create_asset` | New canvas with a palette, layers and frames; returns the palette legend. |
 | `get_asset` | Pixel rows with x/y rulers, palette legend, frames and tags. |
 | `write_pixels` | Write rows of palette characters at (x, y); `.` transparent, `_` keep. |
 | `draw` | Ops: pixel, line, rect, ellipse, fill, replace, outline (with `refresh` to rebuild after moving parts), mirror, flip, shift, clear, copy, dither (+ `onlyOn` masks). One frame, a list of `frames`, or `allFrames`. |
-| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, `tile` mode, `diff` mode (marks pixels changed since the previous frame). |
+| `render_preview` | Image for Claude to inspect: zoom, rulers, grid, 1×/2× copies, 9-slice guides, `tile` mode, `diff` mode (marks pixels changed since the previous frame), `stretch` mode (resizes UI through its 9-slice). |
 | `palette` | Presets, switch palette (nearest or index remap), edit or add colors. |
 | `frames` | Add/copy, delete, move frames, durations, tags. |
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
+| `slices` | Named regions; with `nine` margins a 9-slice for UI (`stretch` or `tile`). |
 | `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
-| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`; scale; optional `outDir`. |
+| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
 | `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes. |
 | `open_viewer` | Open the live viewer in the browser. |
+
+## Pixel UI in Godot
+
+Ask for something like “a 16×16 stone panel and a button with normal/hover/pressed states, 9-slice, export for Godot into `ui/`”. Claude draws them, sets the 9-slice margins, checks the resizing with `render_preview` `stretch`, and exports with `godot-stylebox`:
+
+- `button_sheet@4x.png` holds all the states, and `button_normal@4x.tres`, `button_hover@4x.tres`, `button_pressed@4x.tres` are `StyleBoxTexture` resources with the margins already set.
+- Assign them in the Inspector (`theme_override_styles/normal`, `hover`, `pressed` on a `Button`, `panel` on a `Panel`) or put them in a `Theme`.
+- When `outDir` is inside your Godot project, texture paths are written as `res://…`.
+- For crisp pixels set **Project Settings → Rendering → Textures → Default Texture Filter = Nearest** and use integer scaling (**Display → Window → Stretch → Scale Mode = integer**).
 
 ## Files
 
