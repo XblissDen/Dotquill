@@ -1,0 +1,5 @@
+node_modules/
+# Default workspace when running from this repo (your drawings live here).
+pixel-art/
+*.tmp
+.claude/

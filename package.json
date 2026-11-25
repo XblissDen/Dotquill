@@ -1,0 +1,35 @@
+{
+  "name": "dotquill",
+  "version": "0.1.0",
+  "description": "Local, open-source pixel-art studio that Claude Code (or any MCP client) draws in, with a live browser viewer and game-ready exports.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "mcp": "node src/mcp/server.ts",
+    "viewer": "node src/viewer/main.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "smoke": "node scripts/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "pixel-art",
+    "mcp",
+    "claude",
+    "gamedev",
+    "sprites"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^7.0.2"
+  }
+}

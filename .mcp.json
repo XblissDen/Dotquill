@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dotquill": {
+      "command": "node",
+      "args": ["src/mcp/server.ts"]
+    }
+  }
+}
