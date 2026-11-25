@@ -19,7 +19,7 @@ Claude gets drawing tools over [MCP](https://modelcontextprotocol.io): palette-l
 - **Animation**: frames, durations, tags (idle, walk…), playback and onion skin in the viewer.
 - **Layers**: add, reorder, hide, merge.
 - **Pixel UI (9-slice)**: panels, buttons and bars with fixed corners and stretching or tiling edges; button states as frames; resize check in the preview.
-- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `StyleBoxTexture` for 9-slice UI. Integer upscaling.
+- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, Godot `SpriteFrames` (one animation per tag) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
 - **Import**: PNG to asset, with palette quantization, sheet slicing and downscaling of upscaled art.
 
 ## Requirements
@@ -81,19 +81,27 @@ Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
 | `slices` | Named regions; with `nine` margins a 9-slice for UI (`stretch` or `tile`). |
 | `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
-| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
+| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
 | `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes. |
 | `open_viewer` | Open the live viewer in the browser. |
 
-## Pixel UI in Godot
+## Godot
+
+Ask Claude to export into a folder inside your Godot project (for example `outDir: "C:/Games/my-game/art"`); texture paths are then written as `res://…`. Outside a project the `.tres` files reference the PNG by a relative path, so keep them next to it.
+
+For crisp pixels set **Project Settings → Rendering → Textures → Default Texture Filter = Nearest** and use integer scaling (**Display → Window → Stretch → Scale Mode = integer**).
+
+### Animated sprites
+
+`godot-spriteframes` writes `hero_sheet@4x.png` and `hero_frames@4x.tres`, a `SpriteFrames` resource with one animation per tag (idle, walk, …). Per-frame durations are kept: the animation speed is set from the shortest frame, and longer frames get a larger relative duration. Tag directions `reverse` and `pingpong` are unrolled into the frame order. Assign the `.tres` to **AnimatedSprite2D → Sprite Frames** and call `play("idle")`. Without tags you get one `default` animation over all frames.
+
+### Pixel UI
 
 Ask for something like “a 16×16 stone panel and a button with normal/hover/pressed states, 9-slice, export for Godot into `ui/`”. Claude draws them, sets the 9-slice margins, checks the resizing with `render_preview` `stretch`, and exports with `godot-stylebox`:
 
 - `button_sheet@4x.png` holds all the states, and `button_normal@4x.tres`, `button_hover@4x.tres`, `button_pressed@4x.tres` are `StyleBoxTexture` resources with the margins already set.
 - Assign them in the Inspector (`theme_override_styles/normal`, `hover`, `pressed` on a `Button`, `panel` on a `Panel`) or put them in a `Theme`.
-- When `outDir` is inside your Godot project, texture paths are written as `res://…`.
-- For crisp pixels set **Project Settings → Rendering → Textures → Default Texture Filter = Nearest** and use integer scaling (**Display → Window → Stretch → Scale Mode = integer**).
 
 ## Files
 
@@ -122,7 +130,7 @@ npm test            # unit tests (node:test)
 npm run smoke       # drives the real MCP server through an MCP client; writes previews
 ```
 
-Roadmap ideas: Godot `SpriteFrames` / Tiled exports, `.aseprite` export, tileset autotiling, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
+Roadmap ideas: Tiled exports, `.aseprite` export, tileset autotiling, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
 
 ## License
 

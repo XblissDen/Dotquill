@@ -6,8 +6,8 @@ import type { PixelDoc } from "./doc.ts";
 import { marginsOf, type Rect } from "./slices.ts";
 import { VERSION } from "./version.ts";
 
-export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox";
-export const EXPORT_FORMATS: readonly ExportFormat[] = ["png", "frames", "sheet", "gif", "godot-stylebox"];
+export type ExportFormat = "png" | "frames" | "sheet" | "gif" | "godot-stylebox" | "godot-spriteframes";
+export const EXPORT_FORMATS: readonly ExportFormat[] = ["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes"];
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -47,6 +47,44 @@ export async function findGodotResDir(dir: string): Promise<string | null> {
 
 function scaleRect(r: Rect, s: number): Rect {
   return { x: r.x * s, y: r.y * s, w: r.w * s, h: r.h * s };
+}
+
+/** Godot text-resource float: 1.0, 8.33333. */
+function gdFloat(n: number): string {
+  return Number.isInteger(n) ? `${n}.0` : String(Math.round(n * 100000) / 100000);
+}
+
+function gdString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+export interface GodotAnimation {
+  name: string;
+  /** Frame indices in play order (pingpong and reverse already expanded). */
+  frames: number[];
+  /** Godot plays `speed` frames per second; each frame lasts `duration` units of 1/speed. */
+  speed: number;
+  durations: number[];
+}
+
+/** Animations from tags (or one "default" over all frames); per-frame ms become relative durations. */
+export function godotAnimations(doc: PixelDoc, tag?: string): GodotAnimation[] {
+  const last = doc.frames.length - 1;
+  const tags = tag
+    ? doc.tags.filter((t) => t.name.toLowerCase() === tag.toLowerCase())
+    : doc.tags.length
+      ? doc.tags
+      : [{ name: "default", from: 0, to: last, direction: "forward" as const }];
+  if (!tags.length) throw new Error(`No tag "${tag}".`);
+  return tags.map((t) => {
+    let seq: number[] = [];
+    for (let i = Math.min(t.from, t.to); i <= Math.max(t.from, t.to); i++) seq.push(i);
+    if (t.direction === "reverse") seq.reverse();
+    if (t.direction === "pingpong" && seq.length > 2) seq = [...seq, ...seq.slice(1, -1).reverse()];
+    const ms = seq.map((f) => doc.frames[f].duration);
+    const unit = Math.min(...ms);
+    return { name: t.name, frames: seq, speed: 1000 / unit, durations: ms.map((m) => m / unit) };
+  });
 }
 
 /** Single-frame tag names make nice state names (normal, hover, pressed). */
@@ -203,6 +241,49 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
         });
       });
       return files;
+    }
+    case "godot-spriteframes": {
+      // Sheet PNG + SpriteFrames .tres: one AtlasTexture per frame, one animation per tag.
+      const anims = godotAnimations(doc, o.tag);
+      const frames = [...new Set(anims.flatMap((a) => a.frames))].sort((a, b) => a - b);
+      const { sheet, pos } = layoutSheet(frames);
+      const base = name.split("/").pop()!;
+      const folder = name.includes("/") ? name.slice(0, name.lastIndexOf("/") + 1) : "";
+      const png = `${base}_sheet${suffix}.png`;
+      const texPath = o.resDir ? `${o.resDir}${folder}${png}` : png;
+      const out = [
+        `[gd_resource type="SpriteFrames" load_steps=${frames.length + 2} format=3]`,
+        "",
+        `[ext_resource type="Texture2D" path="${texPath}" id="1_tex"]`,
+        "",
+      ];
+      frames.forEach((f, k) => {
+        out.push(
+          `[sub_resource type="AtlasTexture" id="AtlasTexture_f${f}"]`,
+          'atlas = ExtResource("1_tex")',
+          `region = Rect2(${pos[k].x}, ${pos[k].y}, ${W}, ${H})`,
+          "",
+        );
+      });
+      const animText = anims.map((a) =>
+        [
+          "{",
+          '"frames": [' +
+            a.frames
+              .map((f, i) => `{\n"duration": ${gdFloat(a.durations[i])},\n"texture": SubResource("AtlasTexture_f${f}")\n}`)
+              .join(", ") +
+            "],",
+          '"loop": true,',
+          `"name": &"${gdString(a.name)}",`,
+          `"speed": ${gdFloat(a.speed)}`,
+          "}",
+        ].join("\n"),
+      );
+      out.push("[resource]", `animations = [${animText.join(", ")}]`, "");
+      return [
+        { path: `${folder}${png}`, data: sheet.toPNG(), mime: "image/png" },
+        { path: `${folder}${base}_frames${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
+      ];
     }
     case "gif": {
       const frames = selectFrames(doc, o.tag);

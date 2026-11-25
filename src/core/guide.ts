@@ -67,7 +67,7 @@ Tool tips:
 - Keep volume: squash and stretch should roughly preserve area. Keep the canvas size and the feet baseline fixed to avoid jitter.
 - Idle breathing: torso and head 1 px down on one frame and back; hair, capes and tails follow one frame later.
 - 4-frame side-view walk: contact, passing (body 1 px up), contact (other leg forward), passing. Arms swing opposite to legs.
-- Name ranges with tags (frames → tag): idle, walk, attack. Sheet exports keep tags (Aseprite JSON frameTags).
+- Name ranges with tags (frames → tag): idle, walk, attack. Sheet exports keep tags (Aseprite JSON frameTags); export format "godot-spriteframes" turns each tag into a Godot animation with the frame durations (AnimatedSprite2D).
 - render_preview shows all frames side by side; diff:true outlines in magenta every pixel that changed since the previous frame, so you can confirm that only the intended parts move. The viewer plays the animation; audit reports bounding-box changes (unexpected jumps mean jitter).`,
 
   tiles: `# Tiles and tilesets

@@ -7,7 +7,7 @@ import { audit } from "../src/core/audit.ts";
 import { readPNG } from "../src/core/bitmap.ts";
 import { PixelDoc } from "../src/core/doc.ts";
 import { applyOps, ellipseMask, resolveColor, writeRows } from "../src/core/draw.ts";
-import { buildExport, findGodotResDir } from "../src/core/export.ts";
+import { buildExport, findGodotResDir, godotAnimations } from "../src/core/export.ts";
 import { encodeRows, formatGrid } from "../src/core/grid.ts";
 import { imageToDoc } from "../src/core/importer.ts";
 import { PRESETS } from "../src/core/palettes.ts";
@@ -258,6 +258,33 @@ test("slices survive the file format and reach the exports", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("godot-spriteframes: one animation per tag with relative durations", () => {
+  const doc = make(2, 2, { frames: 4, frameDuration: 100 });
+  doc.frames[1].duration = 200;
+  doc.tags.push(
+    { name: "idle", from: 0, to: 1, direction: "forward" },
+    { name: "swing", from: 1, to: 3, direction: "pingpong" },
+  );
+  const anims = godotAnimations(doc);
+  assert.deepEqual(anims.map((a) => [a.name, a.frames, a.speed, a.durations]), [
+    ["idle", [0, 1], 10, [1, 2]],
+    ["swing", [1, 2, 3, 2], 10, [2, 1, 1, 1]],
+  ]);
+  const [png, tres] = buildExport(doc, "chars/hero", { format: "godot-spriteframes", scale: 3 });
+  assert.equal(png.path, "chars/hero_sheet@3x.png");
+  assert.equal(readPNG(png.data).width, 24);
+  assert.equal(tres.path, "chars/hero_frames@3x.tres");
+  const t = tres.data.toString();
+  assert.match(t, /\[gd_resource type="SpriteFrames" load_steps=6 format=3\]/);
+  assert.match(t, /path="hero_sheet@3x.png"/);
+  assert.match(t, /id="AtlasTexture_f3"\]\natlas = ExtResource\("1_tex"\)\nregion = Rect2\(18, 0, 6, 6\)/);
+  assert.match(t, /"duration": 2\.0,\n"texture": SubResource\("AtlasTexture_f1"\)/);
+  assert.match(t, /"name": &"swing",\n"speed": 10\.0/);
+  const def = godotAnimations(make(2, 2, { frames: 2 }));
+  assert.deepEqual([def[0].name, def[0].frames], ["default", [0, 1]]);
+  assert.equal(godotAnimations(doc, "idle").length, 1);
 });
 
 test("formatGrid adds rulers", () => {

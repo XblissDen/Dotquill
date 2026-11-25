@@ -7,7 +7,7 @@
  * Preview images are written to <workspace>/.dotquill/smoke/.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -220,6 +220,13 @@ await writeFile(path.join(godotDir, "project.godot"), "");
 const exported = await call("export", { name: "smoke/button", format: "godot-stylebox", scale: 4, outDir: path.join(godotDir, "ui") });
 assert.match(exported, /button_pressed@4x\.tres/);
 assert.match(exported, /textures referenced as res:\/\/ui\//);
+
+// Animations for Godot: the slime's idle tag becomes a SpriteFrames animation.
+const sf = await call("export", { name: "slime", format: "godot-spriteframes", scale: 4, outDir: path.join(godotDir, "sprites") });
+assert.match(sf, /Animations: idle \(2 frames, 4\.55 fps\)/);
+const tres = await readFile(path.join(godotDir, "sprites", "slime_frames@4x.tres"), "utf8");
+assert.match(tres, /path="res:\/\/sprites\/slime_sheet@4x\.png"/);
+assert.match(tres, /"duration": 1\.45455/);
 await call("list_assets", {});
 for (const n of SCRATCH) await call("manage_asset", { action: "delete", name: n });
 

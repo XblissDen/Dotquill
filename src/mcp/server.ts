@@ -17,7 +17,7 @@ import { readPNG } from "../core/bitmap.ts";
 import { ColorMatcher, lightness, normalizeHex, parseHex } from "../core/color.ts";
 import { checkDuration, MAX_FRAMES, PixelDoc, validateLayerName, validatePalette, type TagDirection } from "../core/doc.ts";
 import { applyOps, resolveColor, writeRows, type DrawOp } from "../core/draw.ts";
-import { buildExport, findGodotResDir, writeExport } from "../core/export.ts";
+import { buildExport, findGodotResDir, godotAnimations, writeExport } from "../core/export.ts";
 import { encodeRows, formatGrid, indexToChar, MAX_COLORS } from "../core/grid.ts";
 import { GUIDE, GUIDE_TOPICS } from "../core/guide.ts";
 import { imageToDoc } from "../core/importer.ts";
@@ -822,10 +822,10 @@ server.registerTool(
   {
     title: "Export",
     description:
-      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
+      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
     inputSchema: {
       name: zName,
-      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox"]),
+      format: z.enum(["png", "frames", "sheet", "gif", "godot-stylebox", "godot-spriteframes"]),
       slice: z.string().optional().describe("godot-stylebox: which 9-slice (default: the first)."),
       scale: z.number().int().min(1).max(32).optional().describe("Integer upscale (default 1)."),
       frame: zInt.optional().describe('For "png" (default 0).'),
@@ -840,7 +840,7 @@ server.registerTool(
       const name = validateName(a.name);
       const doc = await ws.load(name);
       const outDir = a.outDir ? path.resolve(ws.root, a.outDir) : ws.exportsDir;
-      const godot = a.format === "godot-stylebox";
+      const godot = a.format.startsWith("godot-");
       const resDir = godot ? await findGodotResDir(outDir) : null;
       const files = buildExport(doc, name, {
         format: a.format,
@@ -859,7 +859,12 @@ server.registerTool(
           resDir
             ? `Godot project found: textures referenced as ${resDir}….`
             : "No project.godot above outDir: the .tres files reference the PNG by a relative path (keep them in the same folder).",
-          "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme. For crisp pixels set Project Settings → Rendering → Textures → Default Texture Filter = Nearest.",
+          a.format === "godot-spriteframes"
+            ? `Animations: ${godotAnimations(doc, a.tag)
+                .map((an) => `${an.name} (${an.frames.length} frames, ${Math.round(an.speed * 100) / 100} fps)`)
+                .join(", ")}. Assign the .tres to AnimatedSprite2D → Sprite Frames, then play("<name>").`
+            : "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme.",
+          "For crisp pixels set Project Settings → Rendering → Textures → Default Texture Filter = Nearest.",
         );
       }
       return ok(lines.join("\n"));

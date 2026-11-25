@@ -170,9 +170,9 @@ function createServer(ws: Workspace, port: number): { server: http.Server; stop:
       const name = validateName(body.name ?? "");
       if (!EXPORT_FORMATS.includes(body.format as ExportFormat)) throw new HttpError(400, "Unknown format");
       const doc = await ws.load(name);
-      // Saved Godot styleboxes use res:// paths when the workspace lives inside a Godot project.
+      // Saved Godot resources use res:// paths when the workspace lives inside a Godot project.
       const resDir =
-        body.mode === "save" && body.format === "godot-stylebox" ? await findGodotResDir(ws.exportsDir) : null;
+        body.mode === "save" && body.format?.startsWith("godot-") ? await findGodotResDir(ws.exportsDir) : null;
       const files = buildExport(doc, name, {
         format: body.format as ExportFormat,
         ...(body.scale ? { scale: Number(body.scale) } : {}),
