@@ -3,8 +3,7 @@
  * Standalone viewer, useful when Claude is not running:
  *   node src/viewer/main.ts [--dir <workspace>] [--port 7420] [--open]
  */
-import path from "node:path";
-import { Workspace } from "../core/store.ts";
+import { defaultWorkspaceDir, Workspace } from "../core/store.ts";
 import { openBrowser, startViewer } from "./server.ts";
 
 const argv = process.argv.slice(2);
@@ -13,7 +12,7 @@ const arg = (flag: string) => {
   return i >= 0 ? argv[i + 1] : argv.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
 };
 
-const ws = new Workspace(arg("--dir") ?? process.env.DOTQUILL_DIR ?? path.join(process.cwd(), "pixel-art"));
+const ws = new Workspace(arg("--dir") ?? process.env.DOTQUILL_DIR ?? defaultWorkspaceDir(process.cwd()));
 const port = Number(arg("--port") ?? process.env.DOTQUILL_PORT) || 7420;
 const viewer = await startViewer(ws, { port });
 

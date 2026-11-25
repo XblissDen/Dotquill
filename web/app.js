@@ -416,7 +416,8 @@ function renderInspector() {
 async function loadAssets() {
   const r = await getJSON("/api/assets");
   state.assets = r.assets;
-  $("ws").textContent = r.workspace;
+  $("ws").textContent = r.workspaceLabel || r.workspace;
+  $("ws").title = `Workspace folder: ${r.workspace}`;
   renderAssetList();
   return r;
 }

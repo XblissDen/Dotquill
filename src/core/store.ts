@@ -1,10 +1,21 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { PixelDoc } from "./doc.ts";
 
 export const EXT = ".pixel.json";
 export const META_DIR = ".dotquill";
 export const EXPORTS_DIR = "exports";
+/** Workspace folder name when none is given. */
+export const DEFAULT_DIR = "dotquill-art";
+/** The older default; an existing Dotquill workspace there is still used. */
+export const LEGACY_DIR = "pixel-art";
+
+/** <cwd>/dotquill-art, or <cwd>/pixel-art when that is an existing Dotquill workspace and dotquill-art is not there yet. */
+export function defaultWorkspaceDir(cwd: string): string {
+  const dir = path.join(cwd, DEFAULT_DIR);
+  const legacy = path.join(cwd, LEGACY_DIR);
+  return !existsSync(dir) && existsSync(path.join(legacy, META_DIR)) ? legacy : dir;
+}
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_-]*)*$/i;
 const HISTORY_LIMIT = 50;
 

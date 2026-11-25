@@ -13,7 +13,7 @@ import { imageToDoc } from "../src/core/importer.ts";
 import { PRESETS } from "../src/core/palettes.ts";
 import { renderPreview, renderTilemapPreview } from "../src/core/render.ts";
 import { nineSlice, sliceFromMargins, validateSlice } from "../src/core/slices.ts";
-import { Workspace } from "../src/core/store.ts";
+import { defaultWorkspaceDir, Workspace } from "../src/core/store.ts";
 import {
   BLOB_MASKS,
   blobTiles,
@@ -156,6 +156,21 @@ test("audit flags stray pixels and edge contact", () => {
   assert.doesNotMatch(report, /canvas edge/);
   writeRows(doc, 0, "main", ["0"]);
   assert.match(audit(doc, "t"), /canvas edge/);
+});
+
+test("default workspace: dotquill-art, or an existing older pixel-art workspace", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dotquill-default-"));
+  try {
+    assert.equal(defaultWorkspaceDir(dir), path.join(dir, "dotquill-art"));
+    await mkdir(path.join(dir, "pixel-art"));
+    assert.equal(defaultWorkspaceDir(dir), path.join(dir, "dotquill-art"), "a pixel-art folder of another tool is ignored");
+    await mkdir(path.join(dir, "pixel-art", ".dotquill"));
+    assert.equal(defaultWorkspaceDir(dir), path.join(dir, "pixel-art"));
+    await mkdir(path.join(dir, "dotquill-art"));
+    assert.equal(defaultWorkspaceDir(dir), path.join(dir, "dotquill-art"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("workspace: save, list, undo, rename, delete", async () => {

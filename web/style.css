@@ -20,6 +20,11 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute must win over display rules (e.g. .check is inline-flex). */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;

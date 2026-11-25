@@ -24,7 +24,7 @@ import { imageToDoc } from "../core/importer.ts";
 import { DEFAULT_PRESET, PRESETS, resolvePalette, type PaletteSpec } from "../core/palettes.ts";
 import { renderPreview, renderTilemapPreview } from "../core/render.ts";
 import { describeSlice, sliceFromMargins, validateSlice, validateSliceName, type Slice } from "../core/slices.ts";
-import { validateName, Workspace } from "../core/store.ts";
+import { DEFAULT_DIR, defaultWorkspaceDir, LEGACY_DIR, validateName, Workspace } from "../core/store.ts";
 import { blobCanvasSize, BLOB_TEMPLATE_TEXT, blobTiles, describeTileset, gridTiles, validateTileset } from "../core/tileset.ts";
 import { VERSION } from "../core/version.ts";
 import { openBrowser, startViewer } from "../viewer/server.ts";
@@ -40,8 +40,9 @@ function argValue(flag: string): string | undefined {
   return undefined;
 }
 
-const ws = new Workspace(argValue("--dir") ?? process.env.DOTQUILL_DIR ?? path.join(process.cwd(), "pixel-art"));
+const ws = new Workspace(argValue("--dir") ?? process.env.DOTQUILL_DIR ?? defaultWorkspaceDir(process.cwd()));
 const log = (...a: unknown[]) => console.error("[dotquill]", ...a);
+if (path.basename(ws.root) === LEGACY_DIR) log(`using the older default folder ${LEGACY_DIR}/; rename it to ${DEFAULT_DIR}/ to switch`);
 
 let viewerPromise: Promise<string | null> | null = null;
 function ensureViewer(): Promise<string | null> {

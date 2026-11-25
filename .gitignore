@@ -1,5 +1,6 @@
 node_modules/
-# Default workspace when running from this repo (your drawings live here).
+# Default workspace when running from this repo (your drawings live here), and its older name.
+dotquill-art/
 pixel-art/
 *.tmp
 .claude/

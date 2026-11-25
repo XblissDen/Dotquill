@@ -12,14 +12,21 @@
     "viewer": "node src/viewer/main.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "smoke": "node scripts/smoke.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "docs": "node scripts/docs.ts"
   },
   "keywords": [
     "pixel-art",
     "mcp",
+    "mcp-server",
     "claude",
+    "claude-code",
     "gamedev",
-    "sprites"
+    "sprites",
+    "tileset",
+    "autotile",
+    "godot",
+    "game-assets"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -31,5 +38,10 @@
     "@types/node": "^26.6.10",
     "@types/pngjs": "^6.0.5",
     "typescript": "^7.0.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XblissDen/Dotquill.git"
+  },
+  "homepage": "https://github.com/XblissDen/Dotquill#readme"
 }

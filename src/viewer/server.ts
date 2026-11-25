@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { watch, promises as fs, type FSWatcher } from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { indexedToPNG } from "../core/bitmap.ts";
@@ -50,6 +51,13 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
   } catch {
     throw new HttpError(400, "Invalid JSON");
   }
+}
+
+/** "~/games/art" instead of the full path, so screenshots and streams do not show the user name. */
+function homeRelative(p: string): string {
+  const home = os.homedir();
+  const rel = path.relative(home, p);
+  return home && rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? `~${path.sep}${rel}` : p;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -131,7 +139,12 @@ function createServer(ws: Workspace, port: number): { server: http.Server; stop:
         return sendJSON(res, 200, { app: "dotquill", version: VERSION, workspace: ws.root, exportsDir: ws.exportsDir });
       }
       if (p === "/api/assets") {
-        return sendJSON(res, 200, { workspace: ws.root, assets: await ws.list(), focus: await ws.getFocus() });
+        return sendJSON(res, 200, {
+          workspace: ws.root,
+          workspaceLabel: homeRelative(ws.root),
+          assets: await ws.list(),
+          focus: await ws.getFocus(),
+        });
       }
       if (p === "/api/asset") {
         const raw = await ws.readRaw(validateName(url.searchParams.get("name") ?? ""));

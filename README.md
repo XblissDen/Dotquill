@@ -4,6 +4,38 @@ A local, open-source pixel-art studio that **Claude Code draws in**.
 
 Claude gets drawing tools over [MCP](https://modelcontextprotocol.io): palette-locked pixels, shapes, outlines, mirroring, frames, previews it can look at, and quality checks. You watch the result live in a browser viewer, play animations and export game-ready files. No image model, no GPU, no cloud: Claude places every pixel itself.
 
+![The Dotquill viewer with the dark knight: asset list, zoomed canvas, animation frames, palette and export options](docs/viewer.png)
+
+## What it makes
+
+Everything here was drawn by Claude through Dotquill's tools. The source files are in [`examples/`](examples); open them with `npm run viewer -- --dir examples --open`.
+
+### Characters and animation
+
+<img src="docs/knight-idle.gif" width="192" align="right" alt="A 32×32 dark knight breathing in a 12-frame idle loop">
+
+*“A 32×32 dark knight with a single sword, white light from the top-right, purple outline, and a 12-frame idle.”*
+
+Claude blocks in the silhouette, shades with a locked palette, adds the outline and animates frame by frame: breathing, a flaring cape, a glint on the blade. Exports: sprite sheet with Aseprite JSON, GIF, Godot `SpriteFrames`.
+
+While it works, Claude looks at previews like this one: zoomed frames with rulers and a pixel grid, plus actual-size copies to check that the sprite reads at 1×.
+
+![Preview image as Claude sees it: two knight frames at 12× with coordinate rulers and a pixel grid, and small actual-size copies](docs/claude-preview.png)
+
+### Terrain tilesets with autotiling
+
+Claude draws one template (top): a 3×3 island and a block of ground around a one-tile hole. Dotquill builds all 47 tiles that autotiling needs and paints them on a test map (bottom), so seams show up before export. Godot gets a `TileSet` with the terrain already set up.
+
+![Tileset template: grass-topped earth island, ground around a hole, and two center variants](docs/tileset-template.png)
+
+![The 47 generated tiles painted on a test map: islands, a pond, a ring, thin paths and dense junctions](docs/tileset-map.png)
+
+### Pixel UI
+
+A panel and a button with normal, hover and pressed states, resized through their 9-slices. Exported as Godot `StyleBoxTexture` resources.
+
+![A dark-steel panel stretched to 112×60 and a button in three states stretched to 56×16](docs/ui.png)
+
 ## Why Dotquill
 
 - **No Aseprite or other editor required.** Claude draws directly through Dotquill's own tools. There is nothing else to install, license or keep open.
@@ -28,7 +60,7 @@ Claude gets drawing tools over [MCP](https://modelcontextprotocol.io): palette-l
 Node.js **22.18+**.
 
 ```sh
-git clone <this repo> dotquill
+git clone https://github.com/XblissDen/Dotquill.git dotquill
 cd dotquill
 npm install
 ```
@@ -43,7 +75,7 @@ npm install
 claude mcp add dotquill --scope user -- node /absolute/path/to/dotquill/src/mcp/server.ts
 ```
 
-Assets are then stored in `<your project>/pixel-art/`. To use a different folder, add `-e DOTQUILL_DIR=/path/to/folder` (before `--`).
+Assets are then stored in `<your project>/dotquill-art/`. To use a different folder, add `-e DOTQUILL_DIR=/path/to/folder` (before `--`). A workspace in `pixel-art/`, the older default, keeps working until you rename it.
 
 Other MCP clients (Claude Desktop, Cursor, …) work the same way: command `node`, args `["/absolute/path/to/dotquill/src/mcp/server.ts"]`.
 
@@ -62,7 +94,7 @@ The viewer starts automatically on the first tool call at <http://127.0.0.1:7420
 Without Claude running:
 
 ```sh
-npm run viewer -- --dir /path/to/pixel-art --open
+npm run viewer -- --dir /path/to/dotquill-art --open
 ```
 
 Viewer keys: `←`/`→` frames, `space` play, `+`/`-`/`0` zoom/fit, `g` grid, `o` onion skin, `t` tile 3×3, `s` 9-slice guides, `m` test map (tilesets). Hover a palette swatch to highlight its pixels.
@@ -116,7 +148,7 @@ Ask for something like “a 16×16 stone panel and a button with normal/hover/pr
 ## Files
 
 ```
-pixel-art/                  workspace (DOTQUILL_DIR)
+dotquill-art/               workspace (DOTQUILL_DIR)
   slime.pixel.json          one asset; folders allowed: characters/hero.pixel.json
   exports/                  default export folder
   .dotquill/                history (undo), trash, viewer focus; git-ignored automatically
@@ -128,7 +160,7 @@ A `.pixel.json` stores the palette as hex colors and each layer of each frame as
 
 | Variable | Default | |
 |---|---|---|
-| `DOTQUILL_DIR` | `./pixel-art` | Workspace folder (also `--dir`). |
+| `DOTQUILL_DIR` | `./dotquill-art` | Workspace folder (also `--dir`). |
 | `DOTQUILL_PORT` | `7420` | First viewer port to try. |
 | `DOTQUILL_NO_VIEWER` | | `1` disables the viewer. |
 
@@ -138,10 +170,11 @@ A `.pixel.json` stores the palette as hex colors and each layer of each frame as
 npm run typecheck   # tsc --noEmit
 npm test            # unit tests (node:test)
 npm run smoke       # drives the real MCP server through an MCP client; writes previews
+npm run docs        # renders the README images in docs/ from examples/
 ```
 
 Roadmap ideas: Tiled exports, `.aseprite` export, animated tiles, palette ramp tools, pencil touch-ups in the viewer, optional local diffusion backend (ComfyUI) with palette quantization.
 
 ## License
 
-MIT
+The code is [MIT](LICENSE). The art you make with Dotquill is yours. The example assets in `examples/` fall under the same MIT license, so use them however you like.
