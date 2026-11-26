@@ -212,11 +212,14 @@ const MAX_MAP_PX = 1600;
 /** A blob tileset painted onto a test map (or the given "#"/"." rows), as engine autotiling would. */
 export function renderTilemapPreview(
   doc: PixelDoc,
-  opts: { map?: readonly string[]; frame?: number; zoom?: number; background?: string } = {},
+  opts: { map?: readonly string[]; frames?: number[]; zoom?: number; background?: string; diff?: boolean } = {},
 ): Preview {
-  const frame = doc.checkFrame(opts.frame ?? 0);
+  const frames = opts.frames?.length ? opts.frames : [0];
+  for (const f of frames) doc.checkFrame(f);
   const rows = opts.map?.length ? opts.map : SAMPLE_MAP;
-  const tm = renderTilemap(doc, rows, frame);
+  // One map per asset frame, so frame numbers and diff (against the previous frame) match the asset.
+  const maps = doc.frames.map((_, f) => renderTilemap(doc, rows, f));
+  const tm = maps[frames[0]];
   if (tm.width > MAX_MAP_PX || tm.height > MAX_MAP_PX) {
     throw new Error(`The map is ${tm.width}×${tm.height} px; previews allow up to ${MAX_MAP_PX} px per side. Use fewer cells.`);
   }
@@ -226,7 +229,7 @@ export function renderTilemapPreview(
     palette: doc.palette,
     paletteName: doc.paletteName,
     layers: [{ name: "map", visible: true }],
-    frames: [{ duration: 100, cels: new Map([["map", tm.pixels]]) }],
+    frames: maps.map((m, f) => ({ duration: doc.frames[f].duration, cels: new Map([["map", m.pixels]]) })),
     tags: [],
     slices: [],
     notes: "",
@@ -234,18 +237,26 @@ export function renderTilemapPreview(
     updated: doc.updated,
   });
   const p = renderPreview(mapDoc, {
+    frames,
     grid: false,
     ...(opts.zoom ? { zoom: opts.zoom } : {}),
     ...(opts.background ? { background: opts.background } : {}),
+    ...(opts.diff ? { diff: true } : {}),
   });
   const T = doc.tileset!.tile;
+  const total = doc.frames.length;
   const description = [
-    `Tilemap preview of frame ${frame}: ${tm.cols}×${tm.rows} cells of ${T} px painted with the generated blob tiles, as engine autotiling would ` +
+    `Tilemap preview: ${tm.cols}×${tm.rows} cells of ${T} px painted with the generated blob tiles, as engine autotiling would ` +
       `(cell = pixel ÷ ${T}). ${tm.drawn} cells use drawn template tiles, ${tm.composed} composed tiles, ${tm.variants} center variants; ` +
       `${tm.distinct} of the 47 tiles appear.`,
     "Look for seams at tile borders, broken or doubled outlines, gaps at inner corners, edge art cut at the tile's half line, and obvious repetition.",
-    p.description.replace(/^Frame 0 /, "Map "),
+    p.description.replace(/^Frame (\d+) at/, "Map of frame $1 at").replace(/^Frames ([\d, ]+) \(left→right\) at/, "Maps of frames $1 (left→right) at"),
+    total > 1 && frames.length < total
+      ? `The tileset has ${total} frames (animated tiles): pass frames, e.g. [${doc.frames.map((_, f) => f).slice(0, 4).join(", ")}], with diff:true to check the animation.`
+      : "",
     `Map ("#" = terrain):\n${rows.join("\n")}`,
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
   return { png: p.png, description, zoom: p.zoom };
 }

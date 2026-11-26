@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { audit } from "../src/core/audit.ts";
 import { readPNG } from "../src/core/bitmap.ts";
 import { PixelDoc } from "../src/core/doc.ts";
 import { applyOps, ellipseMask, resolveColor, writeRows } from "../src/core/draw.ts";
-import { buildExport, findGodotResDir, godotAnimations } from "../src/core/export.ts";
+import { buildExport, findGodotResDir, godotAnimations, writeExport } from "../src/core/export.ts";
 import { encodeRows, formatGrid } from "../src/core/grid.ts";
 import { imageToDoc } from "../src/core/importer.ts";
 import { PRESETS } from "../src/core/palettes.ts";
@@ -19,6 +19,7 @@ import { startViewer } from "../src/viewer/server.ts";
 import {
   BLOB_MASKS,
   blobTiles,
+  buildTileAtlas,
   E,
   N,
   NE,
@@ -583,6 +584,66 @@ test("viewer: paint strokes and undo over HTTP; foreign origins are refused", as
     assert.deepEqual(rows(await ws.load("pic")), ["1111", "22.."]);
   } finally {
     await viewer.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("animated tiles: frames that change become tile animations in Godot and Tiled", () => {
+  const doc = blobTemplate();
+  doc.frames[0].duration = 150;
+  const f1 = new Map([["main", doc.cel(0, "main").slice()]]);
+  f1.get("main")![1 * 4 * doc.width + 5] = 30; // one pixel of the center tile (1,1) changes in frame 1
+  doc.frames.push({ duration: 250, cels: f1 });
+  const atlas = buildTileAtlas(doc);
+  assert.deepEqual([atlas.cols, atlas.rows, atlas.durations], [16, 6, [150, 250]]);
+  assert.deepEqual([atlas.tiles[1].col, atlas.tiles[1].row, atlas.tiles[1].frames.length], [2, 0, 2]);
+
+  const [png, tres] = buildExport(doc, "water", { format: "godot-tileset" });
+  assert.deepEqual([readPNG(png.data).width, readPNG(png.data).height], [16 * 4, 6 * 4]);
+  const t = tres.data.toString();
+  assert.equal(t.match(/animation_frame_0\/duration = 0\.15/g)?.length, 48);
+  assert.match(t, /2:0\/animation_frame_0\/duration = 0\.15\n2:0\/animation_frame_1\/duration = 0\.25\n2:0\/0 = 0/);
+
+  const [, tsx] = buildExport(doc, "water", { format: "tiled-tileset", collision: true });
+  const x = tsx.data.toString();
+  assert.equal(tsx.path, "water.tsx");
+  assert.match(x, /<tileset version="1\.10" name="grass" tilewidth="4" tileheight="4" tilecount="96" columns="16">/);
+  assert.match(x, /<tile id="2">\n  <objectgroup draworder="index" id="2">\n   <object id="1" x="0" y="0" width="4" height="4"\/>\n  <\/objectgroup>\n  <animation>\n   <frame tileid="2" duration="150"\/>\n   <frame tileid="3" duration="250"\/>/);
+
+  // Static: no animation; the wang set skips the lone tile; wangid order is top, top-right, right, …, top-left.
+  const still = buildExport(blobTemplate(), "g", { format: "tiled-tileset" })[1].data.toString();
+  assert.doesNotMatch(still, /<animation>/);
+  assert.equal(still.match(/<wangtile /g)?.length, 47);
+  assert.match(still, /<wangset name="grass" type="mixed" tile="46">/);
+  assert.match(still, /<wangtile tileid="1" wangid="1,0,0,0,0,0,0,0"\/>/);
+  assert.match(still, /<tile id="47" probability="0\.25"\/>/);
+
+  // Grid tilesets animate the same way, keeping their cell layout (each cell N tiles wide).
+  const grid = make(8, 4, { frames: 2, tileset: { tile: 4, layout: "grid" } });
+  writeRows(grid, 0, "main", ["1111....", "1111....", "1111....", "1111...."]);
+  writeRows(grid, 1, "main", ["1112....", "1111....", "1111....", "1111...."]);
+  const ga = buildTileAtlas(grid);
+  assert.deepEqual([ga.cols, ga.tiles.length, ga.tiles[0].frames.length], [4, 1, 2]);
+  assert.deepEqual(buildTileAtlas(make(8, 4, { frames: 2, tileset: { tile: 4, layout: "grid" } })).durations.length, 1);
+
+  const p = renderTilemapPreview(doc, { frames: [0, 1], diff: true });
+  assert.match(p.description, /Maps of frames 0, 1 \(left→right\)/);
+  assert.match(p.description, /Magenta squares/);
+  assert.match(renderTilemapPreview(doc).description, /The tileset has 2 frames/);
+});
+
+test("re-exporting a Godot resource keeps the uid Godot gave it", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dotquill-uid-"));
+  try {
+    const files = buildExport(blobTemplate(), "tiles/water", { format: "godot-tileset" });
+    const [, tresPath] = await writeExport(files, dir);
+    const first = await readFile(tresPath, "utf8");
+    assert.doesNotMatch(first, /uid=/);
+    // What Godot does when it first sees the file.
+    await writeFile(tresPath, first.replace("format=3]", 'format=3 uid="uid://abc123xyz"]'));
+    await writeExport(files, dir);
+    assert.match(await readFile(tresPath, "utf8"), /^\[gd_resource type="TileSet" load_steps=3 format=3 uid="uid:\/\/abc123xyz"\]/);
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

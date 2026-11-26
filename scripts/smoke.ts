@@ -263,6 +263,19 @@ assert.match(tiled, /TileSet with 48 tiles \(47 autotiles \+ 1 center variant\(s
 const tset = await readFile(path.join(godotDir, "tiles", "smoke", "grass_tileset@2x.tres"), "utf8");
 assert.match(tset, /path="res:\/\/tiles\/smoke\/grass_tiles@2x\.png"/);
 assert.match(tset, /physics_layer_0\/collision_layer = 1/);
+
+// Animated tiles: a second frame where the center shimmers → animated TileSet and Tiled tileset.
+await call("frames", { name: "smoke/grass", ops: [{ action: "add", copyFrom: 0, duration: 200 }] });
+await call("draw", { name: "smoke/grass", frame: 1, ops: [{ op: "dither", x: 8, y: 8, w: 8, h: 8, color: "l", pattern: "sparse", onlyOn: ["m"] }] });
+assert.match(await call("render_preview", { name: "smoke/grass", tilemap: true, frames: [0, 1], diff: true }), /Maps of frames 0, 1/);
+assert.match(
+  await call("export", { name: "smoke/grass", format: "godot-tileset", outDir: path.join(godotDir, "tiles") }),
+  /animated over 2 frames \(100\/200 ms\)/,
+);
+assert.match(await call("export", { name: "smoke/grass", format: "tiled-tileset" }), /Tiled tileset with 48 tiles .*animated over 2 frames/);
+const tsx = await readFile(path.join(dir, "exports", "smoke", "grass.tsx"), "utf8");
+assert.match(tsx, /<wangset name="grass" type="mixed"/);
+assert.match(tsx, /<frame tileid="1" duration="200"\/>/);
 await call("render_preview", { name: "slime", tilemap: true }, true);
 assert.match(await call("manage_asset", { action: "tileset", name: "smoke/grass", tileset: null }), /no longer a tileset/);
 await call("manage_asset", { action: "tileset", name: "smoke/grass", tileset: { tile: 16 } }, true);

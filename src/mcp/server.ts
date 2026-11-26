@@ -25,7 +25,7 @@ import { DEFAULT_PRESET, PRESETS, resolvePalette, type PaletteSpec } from "../co
 import { renderPreview, renderTilemapPreview } from "../core/render.ts";
 import { describeSlice, sliceFromMargins, validateSlice, validateSliceName, type Slice } from "../core/slices.ts";
 import { DEFAULT_DIR, defaultWorkspaceDir, LEGACY_DIR, validateName, Workspace } from "../core/store.ts";
-import { blobCanvasSize, BLOB_TEMPLATE_TEXT, blobTiles, describeTileset, gridTiles, validateTileset } from "../core/tileset.ts";
+import { blobCanvasSize, BLOB_TEMPLATE_TEXT, buildTileAtlas, describeTileset, validateTileset } from "../core/tileset.ts";
 import { VERSION } from "../core/version.ts";
 import { openBrowser, startViewer } from "../viewer/server.ts";
 
@@ -516,7 +516,7 @@ server.registerTool(
       tilemap: z
         .union([z.boolean(), z.array(z.string()).min(1)])
         .optional()
-        .describe('Blob tilesets: true paints a test map that uses all 47 generated tiles; or pass your own map rows ("#" terrain, "." empty). Shows seams the template hides. Uses the first of frames.'),
+        .describe('Blob tilesets: true paints a test map that uses all 47 generated tiles; or pass your own map rows ("#" terrain, "." empty). Shows seams the template hides. Default frame 0; with frames (and diff) it shows animated tiles frame by frame.'),
     },
     annotations: { readOnlyHint: true },
   },
@@ -527,9 +527,10 @@ server.registerTool(
       if (a.tilemap) {
         const t = renderTilemapPreview(doc, {
           ...(Array.isArray(a.tilemap) ? { map: a.tilemap } : {}),
-          ...(a.frames?.length ? { frame: a.frames[0] } : {}),
+          ...(a.frames?.length ? { frames: a.frames } : {}),
           ...(a.zoom ? { zoom: a.zoom } : {}),
           ...(a.background ? { background: a.background } : {}),
+          ...(a.diff ? { diff: true } : {}),
         });
         return ok(`${summary(name, doc)}\n${t.description}`, [imageContent(t.png)]);
       }
@@ -874,14 +875,14 @@ server.registerTool(
   {
     title: "Export",
     description:
-      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "aseprite" (editable .aseprite file at 1×: indexed palette, layers, frames with durations, tags, slices), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D), "godot-tileset" (tileset assets: tile atlas PNG + a TileSet .tres; blob tilesets come with a terrain set, so Godot autotiles them). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
+      'Exports for games: "png" (one frame), "frames" (one PNG per frame), "sheet" (sprite sheet PNG + Aseprite-compatible JSON with durations, tags and slices), "gif" (animated preview), "aseprite" (editable .aseprite file at 1×: indexed palette, layers, frames with durations, tags, slices), "godot-stylebox" (9-slice UI: PNG + a Godot StyleBoxTexture .tres per frame; single-frame tags name the states, e.g. normal/hover/pressed), "godot-spriteframes" (animations: sheet PNG + a SpriteFrames .tres with one animation per tag and the frame durations, for AnimatedSprite2D), "godot-tileset" (tileset assets: tile atlas PNG + a TileSet .tres; blob tilesets come with a terrain set, so Godot autotiles them; tiles that change between frames become animated tiles), "tiled-tileset" (the same for the Tiled map editor: atlas PNG + .tsx with a terrain (wang) set and tile animations). Writes to <workspace>/exports by default, or to outDir (for Godot use a folder inside the Godot project so texture paths become res://).',
     inputSchema: {
       name: zName,
-      format: z.enum(["png", "frames", "sheet", "gif", "aseprite", "godot-stylebox", "godot-spriteframes", "godot-tileset"]),
+      format: z.enum(["png", "frames", "sheet", "gif", "aseprite", "godot-stylebox", "godot-spriteframes", "godot-tileset", "tiled-tileset"]),
       slice: z.string().optional().describe("godot-stylebox: which 9-slice (default: the first)."),
       scale: z.number().int().min(1).max(32).optional().describe("Integer upscale (default 1)."),
-      frame: zInt.optional().describe('For "png" and "godot-tileset" (default 0).'),
-      collision: z.boolean().optional().describe("godot-tileset: full-tile collision on physics layer 0 (platformer ground and walls)."),
+      frame: zInt.optional().describe('For "png", and for tilesets without animation (default 0).'),
+      collision: z.boolean().optional().describe("godot-tileset, tiled-tileset: full-tile collision (platformer ground and walls)."),
       tag: z.string().optional().describe("Only this tag's frames."),
       columns: z.number().int().min(1).optional().describe("Sheet columns."),
       padding: z.number().int().min(0).max(64).optional().describe("Sheet spacing in px."),
@@ -918,27 +919,35 @@ server.registerTool(
                 .map((an) => `${an.name} (${an.frames.length} frames, ${Math.round(an.speed * 100) / 100} fps)`)
                 .join(", ")}. Assign the .tres to AnimatedSprite2D → Sprite Frames, then play("<name>").`
             : a.format === "godot-tileset"
-              ? tilesetHint(doc, name, a.frame ?? 0, !!a.collision)
+              ? tilesetHint(doc, name, a.frame ?? 0, !!a.collision, "godot")
               : "Use a .tres as a Panel/Button style (theme_override_styles) or in a Theme.",
           "For crisp pixels set Project Settings → Rendering → Textures → Default Texture Filter = Nearest.",
         );
       }
+      if (a.format === "tiled-tileset") lines.push(tilesetHint(doc, name, a.frame ?? 0, !!a.collision, "tiled"));
       return ok(lines.join("\n"));
     }),
 );
 
-function tilesetHint(doc: PixelDoc, name: string, frame: number, collision: boolean): string {
+function tilesetHint(doc: PixelDoc, name: string, frame: number, collision: boolean, engine: "godot" | "tiled"): string {
   const t = doc.tileset!;
-  const phys = collision ? ", full-tile collision on physics layer 0" : "";
-  if (t.layout === "grid") {
-    return `TileSet with ${gridTiles(doc, frame).length} tiles${phys}. In Godot: add a TileMapLayer, set Tile Set to the .tres and paint tiles from the atlas.`;
-  }
-  const n = blobTiles(doc, frame).length;
+  const atlas = buildTileAtlas(doc, frame);
+  const n = atlas.tiles.length;
+  const frames = atlas.durations.length;
+  const anim = frames > 1 ? `, animated over ${frames} frames (${atlas.durations.join("/")} ms)` : "";
+  const phys = collision ? (engine === "godot" ? ", full-tile collision on physics layer 0" : ", full-tile collision rectangles") : "";
   const terrain = t.terrain ?? name.split("/").pop()!;
-  return (
-    `TileSet with ${n} tiles (47 autotiles${n > 47 ? ` + ${n - 47} center variant(s)` : ""}), terrain "${terrain}" in mode Match Corners and Sides${phys}. ` +
-    `In Godot: add a TileMapLayer, set Tile Set to the .tres, open the TileMap panel → Terrains, pick "${terrain}" and paint; Godot picks the right tile for each cell.`
-  );
+  if (t.layout === "grid") {
+    return engine === "godot"
+      ? `TileSet with ${n} tiles${anim}${phys}. In Godot: add a TileMapLayer, set Tile Set to the .tres and paint tiles from the atlas.`
+      : `Tiled tileset with ${n} tiles${anim}${phys}. In Tiled: Map → Add External Tileset, pick the .tsx (keep the PNG next to it).`;
+  }
+  const count = `${n} tiles (47 autotiles${n > 47 ? ` + ${n - 47} center variant(s)` : ""})`;
+  return engine === "godot"
+    ? `TileSet with ${count}, terrain "${terrain}" in mode Match Corners and Sides${anim}${phys}. ` +
+        `In Godot: add a TileMapLayer, set Tile Set to the .tres, open the TileMap panel → Terrains, pick "${terrain}" and paint; Godot picks the right tile for each cell.`
+    : `Tiled tileset with ${count} and a mixed terrain set "${terrain}"${anim}${phys}. ` +
+        `In Tiled: Map → Add External Tileset, pick the .tsx (keep the PNG next to it), open the Terrain Sets view, pick "${terrain}" and paint.`;
 }
 
 server.registerTool(

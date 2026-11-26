@@ -125,14 +125,23 @@ function mapMode() {
 
 /** The blob tileset painted on the server's test map; reloaded when the asset or frame changes. */
 function mapImage() {
-  const key = `${state.name}|${state.frame}|${state.doc.updated}`;
-  if (state.map?.key === key) return state.map.img.complete && state.map.img.naturalWidth ? state.map.img : null;
-  const img = new Image();
-  img.onload = () => state.map?.img === img && render();
-  img.onerror = () => toast("Could not render the test map", "error");
-  img.src = `/api/tilemap?name=${encodeURIComponent(state.name)}&frame=${state.frame}&v=${encodeURIComponent(state.doc.updated)}`;
-  state.map = { key, img };
-  return null;
+  // One image per frame, all fetched at once so animated tiles play smoothly; dropped when the asset changes.
+  const version = `${state.name}|${state.doc.updated}`;
+  if (state.map?.version !== version) {
+    const m = { version, imgs: [], last: null };
+    m.imgs = state.doc.frames.map((_, f) => {
+      const img = new Image();
+      img.onload = () => state.map === m && render();
+      img.onerror = () => toast("Could not render the test map", "error");
+      img.src = `/api/tilemap?name=${encodeURIComponent(state.name)}&frame=${f}&v=${encodeURIComponent(state.doc.updated)}`;
+      return img;
+    });
+    state.map = m;
+  }
+  const img = state.map.imgs[state.frame];
+  // Until this frame arrives, keep showing the last one (no flicker while playing).
+  if (img?.complete && img.naturalWidth) state.map.last = img;
+  return state.map.last;
 }
 
 function fitZoom(w, h) {
@@ -337,7 +346,8 @@ function buildTimeline() {
   if (!hasNine && $("expFormat").value === "godot-stylebox") $("expFormat").value = "sheet";
   $("mapToggle").hidden = !isBlob();
   $("expTileset").disabled = !d.tileset;
-  if (!d.tileset && $("expFormat").value === "godot-tileset") $("expFormat").value = "sheet";
+  $("expTiled").disabled = !d.tileset;
+  if (!d.tileset && $("expFormat").value.endsWith("-tileset")) $("expFormat").value = "sheet";
 }
 
 function renderInspector() {

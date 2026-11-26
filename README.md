@@ -50,9 +50,9 @@ A panel and a button with normal, hover and pressed states, resized through thei
 - **Drawing**: pixel rows, lines, rectangles, ellipses, flood fill, color replace, outlines, mirroring, flip, shift, copy/move regions, dithering, repeating patterns, and `onlyOn` masks for shading inside a shape.
 - **Animation**: frames, durations, tags (idle, walk…), playback and onion skin in the viewer.
 - **Layers**: add, reorder, hide, merge.
-- **Terrain tilesets with autotiling**: draw a 7×3-tile template (an island and a ring around a hole), get all 47 "blob" tiles an engine needs; a test-map preview shows seams before you export.
+- **Terrain tilesets with autotiling**: draw a 7×3-tile template (an island and a ring around a hole), get all 47 "blob" tiles an engine needs; a test-map preview shows seams before you export. Give the tileset frames and the tiles animate (water, lava, torches).
 - **Pixel UI (9-slice)**: panels, buttons and bars with fixed corners and stretching or tiling edges; button states as frames; resize check in the preview.
-- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, editable `.aseprite` (layers, tags, slices), Godot `SpriteFrames` (one animation per tag), `TileSet` (terrain autotiling, optional collision) and `StyleBoxTexture` for 9-slice UI. Integer upscaling.
+- **Exports**: PNG, PNG per frame, sprite sheet + Aseprite-compatible JSON with tags and slices (Phaser, PixiJS, Godot and other importers), animated GIF, editable `.aseprite` (layers, tags, slices), Godot `SpriteFrames` (one animation per tag), `TileSet` (terrain autotiling, animated tiles, optional collision) and `StyleBoxTexture` for 9-slice UI, and [Tiled](https://www.mapeditor.org/) tilesets (`.tsx` with a terrain set and animations) for Unity, Defold, Phaser, LÖVE and other engines. Integer upscaling.
 - **Touch-ups in the viewer**: pencil, eraser, eyedropper and undo, for the pixel you want changed right now.
 - **Import**: PNG to asset, with palette quantization, sheet slicing and downscaling of upscaled art.
 
@@ -117,7 +117,7 @@ Touch-ups: `p` pencil, `e` eraser, `v` back to view only. Click a palette swatch
 | `layers` | Add, delete, rename, move, show/hide, merge down. |
 | `slices` | Named regions; with `nine` margins a 9-slice for UI (`stretch` or `tile`). |
 | `audit` | Stray pixels, suspicious lone pixels (deliberate highlights are told apart), edge contact, empty frames, animation jitter, color usage. |
-| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `aseprite`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-tileset` (atlas + `TileSet` `.tres` with terrain, optional collision), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
+| `export` | `png`, `frames`, `sheet` (+ JSON), `gif`, `aseprite`, `godot-spriteframes` (sheet + `SpriteFrames` `.tres`, one animation per tag), `godot-tileset` (atlas + `TileSet` `.tres` with terrain and animated tiles, optional collision), `tiled-tileset` (atlas + Tiled `.tsx`), `godot-stylebox` (PNG + `StyleBoxTexture` `.tres` per state); scale; optional `outDir`. |
 | `import_png` | PNG → asset: keep colors or quantize to a palette, slice sheets, downscale upscaled art. |
 | `manage_asset` | Duplicate, rename, delete (to trash), undo, edit notes, set or remove tileset settings. |
 | `open_viewer` | Open the live viewer in the browser. |
@@ -141,12 +141,20 @@ Ask for something like “a 16×16 grass tileset with autotiling, export it for 
 - `collision: true` adds full-tile collision on physics layer 0 for platformer ground and walls.
 - A `grid` tileset (props, decorations) exports every non-empty cell as a plain tile.
 
+### Animated tiles
+
+Give a tileset several frames, for example “16×16 water with autotiling, 4 frames of ripples”. Tiles that change between frames are exported as animated tiles with the frame durations: in the atlas each tile's frames sit side by side, and the `TileSet` plays them, so every water cell on the map moves in sync while you keep painting with the terrain. Check the animation with `render_preview` `tilemap` plus `frames` and `diff`, or with the viewer's Map mode (`m`) and play.
+
 ### Pixel UI
 
 Ask for something like “a 16×16 stone panel and a button with normal/hover/pressed states, 9-slice, export for Godot into `ui/`”. Claude draws them, sets the 9-slice margins, checks the resizing with `render_preview` `stretch`, and exports with `godot-stylebox`:
 
 - `button_sheet@4x.png` holds all the states, and `button_normal@4x.tres`, `button_hover@4x.tres`, `button_pressed@4x.tres` are `StyleBoxTexture` resources with the margins already set.
 - Assign them in the Inspector (`theme_override_styles/normal`, `hover`, `pressed` on a `Button`, `panel` on a `Panel`) or put them in a `Theme`.
+
+## Tiled
+
+For engines without their own map editor, `tiled-tileset` writes the tile atlas and a `.tsx` tileset for [Tiled](https://www.mapeditor.org/): blob tilesets come with a mixed terrain set (Tiled's Terrain Brush picks edges and corners for you), center variants have a lower probability, animated tiles keep their frames and durations, and `collision: true` adds full-tile collision rectangles. In Tiled use **Map → Add External Tileset**, keep the PNG next to the `.tsx`, and paint with the terrain from the **Terrain Sets** view.
 
 ## Files
 
@@ -176,7 +184,7 @@ npm run smoke       # drives the real MCP server through an MCP client; writes p
 npm run docs        # renders the README images in docs/ from examples/
 ```
 
-Roadmap ideas: Tiled exports, animated tiles, palette ramp tools, optional local diffusion backend (ComfyUI) with palette quantization.
+Roadmap ideas: Tiled maps (`.tmx`), palette ramp tools, an npm package, optional local diffusion backend (ComfyUI) with palette quantization.
 
 ## License
 

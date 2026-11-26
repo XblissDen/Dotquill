@@ -229,12 +229,20 @@ export function blobTiles(doc: PixelDoc, frame = 0): BlobTile[] {
     for (let q = 0; q < 4; q++) copyQuarter(src, doc.width, QUARTER_SOURCE[q][quarterState(mask, q)], q, T, px);
     out.push({ mask, variant: 0, source: "composed", pixels: px });
   }
+  // A variant drawn in any frame counts in every frame, so all frames list the same tiles.
   let v = 0;
+  const comps = allComposites(doc);
   for (const cell of VARIANT_CELLS) {
-    const px = cellPixels(src, doc.width, cell, T);
-    if (!isBlank(px)) out.push({ mask: 255, variant: ++v, source: "drawn", pixels: px });
+    if (!usedInAnyFrame(comps, doc.width, cell, T)) continue;
+    out.push({ mask: 255, variant: ++v, source: "drawn", pixels: cellPixels(src, doc.width, cell, T) });
   }
   return out;
+}
+
+const allComposites = (doc: PixelDoc) => doc.frames.map((_, f) => doc.composite(f));
+
+function usedInAnyFrame(comps: readonly Int16Array[], width: number, cell: Cell, T: number): boolean {
+  return comps.some((c) => !isBlank(cellPixels(c, width, cell, T)));
 }
 
 export interface GridTile {
@@ -243,19 +251,92 @@ export interface GridTile {
   pixels: Int16Array;
 }
 
-/** Non-empty cells of a grid tileset (or of any tileset canvas). */
+/** Cells of a grid tileset that are non-empty in any frame (the same list for every frame). */
 export function gridTiles(doc: PixelDoc, frame = 0): GridTile[] {
   const t = doc.tileset;
   if (!t) throw new Error("This asset is not a tileset.");
-  const src = doc.composite(frame);
+  const comps = allComposites(doc);
+  const src = comps[doc.checkFrame(frame)];
   const out: GridTile[] = [];
   for (let row = 0; row < doc.height / t.tile; row++) {
     for (let col = 0; col < doc.width / t.tile; col++) {
-      const px = cellPixels(src, doc.width, [col, row], t.tile);
-      if (!isBlank(px)) out.push({ col, row, pixels: px });
+      if (usedInAnyFrame(comps, doc.width, [col, row], t.tile)) out.push({ col, row, pixels: cellPixels(src, doc.width, [col, row], t.tile) });
     }
   }
   return out;
+}
+
+/** Atlas columns of a static blob atlas (animated atlases are this many tiles × frames wide). */
+export const BLOB_ATLAS_COLUMNS = 8;
+
+export interface AtlasTile {
+  /** Atlas position (in tiles) of the first frame; further frames follow to the right. */
+  col: number;
+  row: number;
+  /** Pixels per animation frame (one entry when the atlas is static). */
+  frames: Int16Array[];
+  /** Blob terrain mask. */
+  mask?: number;
+  probability?: number;
+}
+
+export interface TileAtlas {
+  tile: number;
+  /** Atlas size in tiles. */
+  cols: number;
+  rows: number;
+  /** Frame durations in ms; length 1 = static tiles. */
+  durations: number[];
+  tiles: AtlasTile[];
+  /** Blob tilesets: the plain center tile (terrain swatch color). */
+  center?: Int16Array;
+}
+
+/**
+ * Lays out a tileset's tiles for export. If the asset has several frames and any tile changes
+ * between them, every tile becomes an animated tile with one atlas cell per frame, left to right.
+ * Otherwise only `frame` is used. Blob tilesets: 8 tiles per row; grid tilesets keep their cells.
+ */
+export function buildTileAtlas(doc: PixelDoc, frame = 0): TileAtlas {
+  const t = doc.tileset;
+  if (!t) throw new Error("This asset is not a tileset. Create one with create_asset tileset, or set it with manage_asset action tileset.");
+  doc.checkFrame(frame);
+  const all = doc.frames.map((_, f) => f);
+  const perFrame = (f: number) =>
+    t.layout === "blob" ? blobTiles(doc, f).map((b) => b.pixels) : gridTiles(doc, f).map((g) => g.pixels);
+  const first = perFrame(all[0]);
+  const rest = all.slice(1).map(perFrame);
+  const animated = rest.some((tiles) => tiles.some((px, k) => px.some((v, i) => v !== first[k][i])));
+  const frames = animated ? [first, ...rest] : [perFrame(frame)];
+  const n = frames.length;
+  const durations = animated ? doc.frames.map((f) => f.duration) : [doc.frames[frame].duration];
+  if (t.layout === "blob") {
+    const meta = blobTiles(doc, frame);
+    const tiles = meta.map((b, k) => ({
+      col: (k % BLOB_ATLAS_COLUMNS) * n,
+      row: Math.floor(k / BLOB_ATLAS_COLUMNS),
+      frames: frames.map((f) => f[k]),
+      mask: b.mask,
+      ...(b.variant ? { probability: VARIANT_PROBABILITY } : {}),
+    }));
+    const center = meta.findIndex((b) => b.mask === 255 && !b.variant);
+    return {
+      tile: t.tile,
+      cols: BLOB_ATLAS_COLUMNS * n,
+      rows: Math.ceil(tiles.length / BLOB_ATLAS_COLUMNS),
+      durations,
+      tiles,
+      center: frames[0][center],
+    };
+  }
+  const cells = gridTiles(doc, frame);
+  return {
+    tile: t.tile,
+    cols: (doc.width / t.tile) * n,
+    rows: doc.height / t.tile,
+    durations,
+    tiles: cells.map((c, k) => ({ col: c.col * n, row: c.row, frames: frames.map((f) => f[k]) })),
+  };
 }
 
 /**

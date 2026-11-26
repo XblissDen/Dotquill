@@ -85,10 +85,17 @@ Terrain with autotiling (grass, dirt, water, walls): a blob tileset.
 - Steps: (1) draw the center tile (1,1) seamless. (2) Copy it into every cell of cols 0–5 except the hole (draw op copy). (3) Draw the same border along the outside of the island and around the inside of the hole: outline, lip, shadow (draw op pattern repeats one tile's border rows along a row of tiles). Cols 3–5 continue into terrain on their outside: no border there. Keep border art inside the outer half of each tile: missing tiles are built from quarter tiles cut at the half lines. (4) render_preview tilemap:true paints a test map with all 47 tiles: fix seams, broken outlines and repetition. audit lists quarters that differ from the copies the built tiles use.
 - The empty side is transparent: put the ground underneath on a lower layer (in Godot a second TileMapLayer).
 - Side-view platforms: grass lip on the top edge, darker toward the bottom; export with collision:true.
-- Export format "godot-tileset": atlas PNG + TileSet .tres with the terrain set up, so Godot picks the right tile per painted cell. Use an outDir inside the Godot project.
+- Export format "godot-tileset": atlas PNG + TileSet .tres with the terrain set up, so Godot picks the right tile per painted cell. Use an outDir inside the Godot project. Format "tiled-tileset": the same for the Tiled map editor (.tsx with a terrain set), used with Unity, Defold, Phaser, LÖVE and others.
+
+Animated tiles (water, lava, torches, swaying grass):
+- Give the tileset several frames (frames → add with copyFrom 0), then change only what moves; frame durations become the tile animation timing (water 150–250 ms, 4–8 frames; fire faster).
+- Tiles that change between frames are exported as animated tiles; then every tile of the set gets all frames (static ones just repeat), and the map plays them in sync.
+- Keep the border profile the same in every frame unless the edge itself should move (foam, ripples), or animated edges will not meet their neighbors.
+- Never recolor a whole edge or the whole surface between frames: every copy on the map changes at once and the shore strobes. Keep the base calm and static and move small parts: short glints traveling along the foam line (a pattern shifted 1 px per frame, period = frame count), ripples that drift and fade. Use mid-contrast colors for pixels that change; save white for a few glints. 6–8 frames at 120–200 ms look smoother than 3–4.
+- Check with render_preview tilemap:true, frames:[0,1,2,3], diff:true: magenta marks what changes each frame. The viewer's Map mode plays it.
 
 Other tiles:
-- Props and decorations: tileset {tile: 16, layout: "grid"} on a canvas of whole tiles; every non-empty cell becomes a tile (also exported by godot-tileset).
+- Props and decorations: tileset {tile: 16, layout: "grid"} on a canvas of whole tiles; every non-empty cell becomes a tile (also exported by godot-tileset and tiled-tileset; cells that change between frames animate).
 - Single seamless tiles: check with render_preview tile:true (3×3 repeat); make 2–4 variants (manage_asset duplicate) to break repetition.`,
 
   palettes: `# Palettes

@@ -5,8 +5,10 @@ import { toAseprite } from "./aseprite.ts";
 import { Bitmap, paletteRGB } from "./bitmap.ts";
 import type { PixelDoc } from "./doc.ts";
 import { marginsOf, type Rect } from "./slices.ts";
-import { blobTiles, E, gridTiles, N, NE, NW, S, SE, SW, VARIANT_PROBABILITY, W as WEST } from "./tileset.ts";
+import { buildTileAtlas, E, N, NE, NW, S, SE, SW, W as WEST } from "./tileset.ts";
 import { VERSION } from "./version.ts";
+
+export { BLOB_ATLAS_COLUMNS } from "./tileset.ts";
 
 export type ExportFormat =
   | "png"
@@ -16,7 +18,8 @@ export type ExportFormat =
   | "aseprite"
   | "godot-stylebox"
   | "godot-spriteframes"
-  | "godot-tileset";
+  | "godot-tileset"
+  | "tiled-tileset";
 export const EXPORT_FORMATS: readonly ExportFormat[] = [
   "png",
   "frames",
@@ -26,9 +29,8 @@ export const EXPORT_FORMATS: readonly ExportFormat[] = [
   "godot-stylebox",
   "godot-spriteframes",
   "godot-tileset",
+  "tiled-tileset",
 ];
-/** Columns of the generated blob atlas. */
-export const BLOB_ATLAS_COLUMNS = 8;
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -63,13 +65,22 @@ const PEERING_BITS: readonly [number, string][] = [
   [NE, "top_right_corner"],
 ];
 
-/** Most used color of a tile, as a Godot Color (terrain swatch in the editor). */
-function dominantColor(px: Int16Array, palette: readonly string[]): string {
+/** Most used color of a tile (terrain swatch in the editors). */
+function dominantHex(px: Int16Array, palette: readonly string[]): string {
   const counts = new Map<number, number>();
   for (const v of px) if (v >= 0) counts.set(v, (counts.get(v) ?? 0) + 1);
   const best = [...counts].sort((a, b) => b[1] - a[1])[0];
-  const [r, g, b] = best ? paletteRGB([palette[best[0]]])[0] : [128, 128, 128];
+  return best ? palette[best[0]] : "#808080";
+}
+
+/** The same as a Godot Color. */
+function dominantColor(px: Int16Array, palette: readonly string[]): string {
+  const [r, g, b] = paletteRGB([dominantHex(px, palette)])[0];
   return `Color(${[r, g, b].map((c) => gdFloat(Math.round((c / 255) * 1000) / 1000)).join(", ")}, 1)`;
+}
+
+function xmlAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** Finds the Godot project containing dir and returns dir as a res:// folder ("res://ui/"), or null. */
@@ -329,42 +340,61 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
         { path: `${folder}${base}_frames${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
       ];
     }
-    case "godot-tileset": {
-      // Tile atlas PNG + TileSet .tres. Blob tilesets get a terrain set with peering bits, so Godot autotiles them.
+    case "godot-tileset":
+    case "tiled-tileset": {
+      // Tile atlas PNG + an engine tileset file. Blob tilesets come with terrain/wang data, so the editor autotiles
+      // them; tiles that change between frames become animated tiles (frames to the right of each tile).
       const ts = doc.tileset;
-      if (!ts) throw new Error("This asset is not a tileset. Create one with create_asset tileset, or set it with manage_asset action tileset.");
-      const f = doc.checkFrame(o.frame ?? 0);
-      const T = ts.tile;
+      const a = buildTileAtlas(doc, o.frame ?? 0);
+      if (!a.tiles.length) throw new Error("The tileset has no tiles yet (every cell is empty).");
+      const T = a.tile;
       const TS = T * scale;
+      const n = a.durations.length;
       const base = name.split("/").pop()!;
       const folder = name.includes("/") ? name.slice(0, name.lastIndexOf("/") + 1) : "";
       const png = `${base}_tiles${suffix}.png`;
-      const texPath = o.resDir ? `${o.resDir}${folder}${png}` : png;
-      type Placed = { col: number; row: number; pixels: Int16Array; mask?: number; probability?: number };
-      let placed: Placed[];
-      let cols: number;
-      let rows: number;
-      let center: Int16Array | null = null;
-      if (ts.layout === "blob") {
-        const tiles = blobTiles(doc, f);
-        cols = BLOB_ATLAS_COLUMNS;
-        rows = Math.ceil(tiles.length / cols);
-        placed = tiles.map((t, k) => ({
-          col: k % cols,
-          row: Math.floor(k / cols),
-          pixels: t.pixels,
-          mask: t.mask,
-          ...(t.variant ? { probability: VARIANT_PROBABILITY } : {}),
-        }));
-        center = tiles.find((t) => t.mask === 255 && !t.variant)!.pixels;
-      } else {
-        cols = doc.width / T;
-        rows = doc.height / T;
-        placed = gridTiles(doc, f);
+      const sheet = new Bitmap(a.cols * TS, a.rows * TS);
+      for (const t of a.tiles) t.frames.forEach((px, k) => sheet.drawIndexed(px, T, T, pal, (t.col + k) * TS, t.row * TS, scale));
+      const image = { path: `${folder}${png}`, data: sheet.toPNG(), mime: "image/png" };
+      const terrain = ts!.terrain ?? base;
+      if (o.format === "tiled-tileset") {
+        const id = (t: { col: number; row: number }) => t.row * a.cols + t.col;
+        const x = [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          `<tileset version="1.10" name="${xmlAttr(terrain)}" tilewidth="${TS}" tileheight="${TS}" tilecount="${a.cols * a.rows}" columns="${a.cols}">`,
+          ` <image source="${xmlAttr(png)}" width="${a.cols * TS}" height="${a.rows * TS}"/>`,
+        ];
+        for (const t of a.tiles) {
+          const attrs = t.probability !== undefined ? ` probability="${t.probability}"` : "";
+          const body: string[] = [];
+          if (o.collision) {
+            body.push(`  <objectgroup draworder="index" id="2">`, `   <object id="1" x="0" y="0" width="${TS}" height="${TS}"/>`, "  </objectgroup>");
+          }
+          if (n > 1) {
+            body.push("  <animation>", ...a.durations.map((ms, k) => `   <frame tileid="${id(t) + k}" duration="${ms}"/>`), "  </animation>");
+          }
+          if (attrs || body.length) x.push(body.length ? ` <tile id="${id(t)}"${attrs}>` : ` <tile id="${id(t)}"${attrs}/>`, ...body, ...(body.length ? [" </tile>"] : []));
+        }
+        if (a.center) {
+          // Mixed (corner + edge) wang set; wangid order: top, top-right, right, bottom-right, bottom, bottom-left, left, top-left.
+          const center = a.tiles.find((t) => t.mask === 255 && t.probability === undefined)!;
+          x.push(
+            " <wangsets>",
+            `  <wangset name="${xmlAttr(terrain)}" type="mixed" tile="${id(center)}">`,
+            `   <wangcolor name="${xmlAttr(terrain)}" color="${dominantHex(a.center, doc.palette)}" tile="${id(center)}" probability="1"/>`,
+          );
+          for (const t of a.tiles) {
+            // A tile with no edges or corners set looks like "no terrain" to Tiled; leave the lone tile for manual use.
+            if (!t.mask) continue;
+            const w = [N, NE, E, SE, S, SW, WEST, NW].map((bit) => (t.mask! & bit ? 1 : 0)).join(",");
+            x.push(`   <wangtile tileid="${id(t)}" wangid="${w}"/>`);
+          }
+          x.push("  </wangset>", " </wangsets>");
+        }
+        x.push("</tileset>", "");
+        return [image, { path: `${folder}${base}.tsx`, data: Buffer.from(x.join("\n")), mime: "application/xml" }];
       }
-      if (!placed.length) throw new Error("The tileset has no tiles yet (every cell is empty).");
-      const atlas = new Bitmap(cols * TS, rows * TS);
-      for (const t of placed) atlas.drawIndexed(t.pixels, T, T, pal, t.col * TS, t.row * TS, scale);
+      const texPath = o.resDir ? `${o.resDir}${folder}${png}` : png;
       const h = TS / 2;
       const out = [
         '[gd_resource type="TileSet" load_steps=3 format=3]',
@@ -375,8 +405,10 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
         'texture = ExtResource("1_tex")',
         `texture_region_size = Vector2i(${TS}, ${TS})`,
       ];
-      for (const t of placed) {
-        const id = `${t.col}:${t.row}/0`;
+      for (const t of a.tiles) {
+        const cell = `${t.col}:${t.row}`;
+        if (n > 1) a.durations.forEach((ms, k) => out.push(`${cell}/animation_frame_${k}/duration = ${gdFloat(ms / 1000)}`));
+        const id = `${cell}/0`;
         out.push(`${id} = 0`);
         if (t.mask !== undefined) out.push(`${id}/terrain_set = 0`, `${id}/terrain = 0`);
         if (t.probability !== undefined) out.push(`${id}/probability = ${gdFloat(t.probability)}`);
@@ -385,18 +417,15 @@ export function buildExport(doc: PixelDoc, name: string, o: ExportOptions): Expo
       }
       out.push("", "[resource]", `tile_size = Vector2i(${TS}, ${TS})`);
       if (o.collision) out.push("physics_layer_0/collision_layer = 1");
-      if (center) {
+      if (a.center) {
         out.push(
           "terrain_set_0/mode = 0",
-          `terrain_set_0/terrain_0/name = "${gdString(ts.terrain ?? base)}"`,
-          `terrain_set_0/terrain_0/color = ${dominantColor(center, doc.palette)}`,
+          `terrain_set_0/terrain_0/name = "${gdString(terrain)}"`,
+          `terrain_set_0/terrain_0/color = ${dominantColor(a.center, doc.palette)}`,
         );
       }
       out.push('sources/0 = SubResource("TileSetAtlasSource_1")', "");
-      return [
-        { path: `${folder}${png}`, data: atlas.toPNG(), mime: "image/png" },
-        { path: `${folder}${base}_tileset${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" },
-      ];
+      return [image, { path: `${folder}${base}_tileset${suffix}.tres`, data: Buffer.from(out.join("\n")), mime: "text/plain" }];
     }
     case "aseprite":
       // An editable source file: always 1×, all frames, layers, tags and slices.
@@ -437,8 +466,25 @@ export async function writeExport(files: readonly ExportFile[], outDir: string):
   for (const f of files) {
     const p = path.join(outDir, ...f.path.split("/"));
     await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, f.data);
+    await fs.writeFile(p, p.endsWith(".tres") ? await keepGodotUid(p, f.data) : f.data);
     out.push(p);
   }
   return out;
+}
+
+/**
+ * Godot gives a resource a uid the first time a project sees it, and scenes refer to it by that uid.
+ * When re-exporting over such a file, keep its uid so those references stay valid.
+ */
+async function keepGodotUid(file: string, data: Buffer): Promise<Buffer> {
+  let old: string;
+  try {
+    old = await fs.readFile(file, "utf8");
+  } catch {
+    return data;
+  }
+  const uid = /^\[gd_resource [^\]\n]*uid="(uid:\/\/[a-z0-9]+)"/.exec(old)?.[1];
+  const text = data.toString();
+  if (!uid || /^\[gd_resource [^\]\n]*uid=/.test(text)) return data;
+  return Buffer.from(text.replace(/^\[gd_resource ([^\]\n]*)\]/, `[gd_resource $1 uid="${uid}"]`));
 }
